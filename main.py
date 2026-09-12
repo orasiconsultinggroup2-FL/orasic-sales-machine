@@ -1,22 +1,40 @@
 ﻿from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-import os, smtplib
+import os, smtplib, random, logging, requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from groq import Groq
 import google.generativeai as genai
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 
-# CONFIGURACIÓN DE LAS 3 KEYS
-url = os.environ.get("SUPABASE_URL")
-key = os.environ.get("SUPABASE_KEY")
-supabase = None
-if url and key:
+# CONFIGURACIÓN SUPABASE VIA REST API DIRECTA
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+supabase_connected = False
+
+if SUPABASE_URL and SUPABASE_KEY:
     try:
-        from supabase import create_client
-        supabase = create_client(url, key)
-    except: pass
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        test_url = f"{SUPABASE_URL}/rest/v1/leads?select=id&limit=1"
+        response = requests.get(test_url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            supabase_connected = True
+            logger.info(f"✅ Conexión REST a Supabase exitosa: {SUPABASE_URL}")
+        else:
+            logger.error(f"❌ Error REST Supabase: {response.status_code} - {response.text[:200]}")
+    except Exception as e:
+        logger.error(f"❌ Excepción conectando a Supabase: {e}")
+else:
+    logger.warning("⚠️ Faltan variables SUPABASE_URL o SUPABASE_KEY")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -26,78 +44,118 @@ genai.configure(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
-# GENERADOR DE PITCHES INTELIGENTE CON LÓGICA DUAL
+def get_leads_from_supabase():
+    """Obtiene leads usando REST API directa"""
+    if not supabase_connected:
+        return []
+    
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&limit=100"
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"✅ Cargados {len(data)} leads reales vía REST")
+            return data
+        else:
+            logger.error(f"Error fetching leads: {response.status_code} - {response.text[:200]}")
+            return []
+    except Exception as e:
+        logger.error(f"Excepción obteniendo leads: {e}")
+        return []
+
+# --- NORMALIZACIÓN LINGÜÍSTICA PERFECTA ---
+def normalize_lead_text(lead_data):
+    rubro_raw = lead_data.get('rubro', '').strip().lower()
+    distrito = lead_data.get('distrito', '').strip()
+    
+    corrections = {'barberíass': 'barbería', 'barberias': 'barbería', 'barberías': 'barbería',
+                   'clínicaas': 'clínica', 'clinicas': 'clínica', 'clínicas': 'clínica'}
+    rubro_clean = corrections.get(rubro_raw, rubro_raw)
+    if rubro_clean.endswith('s') and not rubro_clean.endswith('sis'):
+        rubro_clean = rubro_clean[:-1]
+    
+    feminine_kw = ['clínica', 'academia', 'veterinaria', 'estética', 'boutique', 'tienda', 'peluquería']
+    is_feminine = any(kw in rubro_clean for kw in feminine_kw)
+    
+    for art in ['el ', 'la ', 'los ', 'las ']:
+        if distrito.lower().startswith(art):
+            distrito = distrito[len(art):].strip()
+    
+    lead_data['rubro_clean'] = rubro_clean
+    lead_data['distrito_clean'] = distrito.title()
+    lead_data['is_feminine'] = is_feminine
+    return lead_data
+
+def get_human_greeting(nombre, is_feminine):
+    if is_feminine:
+        return f"Hola equipo de {nombre}, estaba viendo su perfil y..."
+    return f"Hola chicos de {nombre}, estaba revisando negocios en la zona y..."
+
 def generate_pitch(lead_data):
     origen = lead_data.get('origen', 'autonomo')
+    if origen == 'manual' and lead_data.get('pitch_validado'):
+        return lead_data['pitch_validado']
     
-    # FLUJO A: LEADS MANUALES/HISTÓRICOS (LOS 169)
-    if origen == 'manual':
-        return lead_data.get('pitch_validado', '[Error: Pitch manual no encontrado]')
-    
-    # FLUJO B: LEADS AUTÓNOMOS (NUEVOS)
-    rubro = lead_data.get('rubro', 'Negocio')
+    lead_data = normalize_lead_text(lead_data)
+    rubro = lead_data.get('rubro_clean', 'negocio')
     nombre = lead_data.get('nombre', 'Cliente')
-    distrito = lead_data.get('distrito', 'Lima')
-    plan = lead_data.get('plan_sugerido') or lead_data.get('plan', 'STARTER')
+    distrito = lead_data.get('distrito_clean', 'Lima')
+    plan = lead_data.get('plan_sugerido', 'STARTER')
+    is_feminine = lead_data.get('is_feminine', False)
     
-    # Obtener dolor desde Supabase o inferirlo
-    dolor = f"Problemas operativos comunes en {rubro}."
-    tema = "Eficiencia operativa"
+    greeting = get_human_greeting(nombre, is_feminine)
+    possessive = "la tuya" if is_feminine else "el tuyo"
+    hook = f"{greeting} noté que en {rubro}s como {possessive} en {distrito}, lidiar con la falta de sistemas suele ser el freno invisible."
     
-    if supabase:
-        try:
-            res = supabase.table("content_assets").select("*").limit(1).execute()
-            if res.data:
-                asset = res.data[0]
-                dolor = asset.get('dolor_sistemico', dolor)
-                tema = asset.get('tema_central', tema)
-        except: pass
-    
-    gancho = f"Hola {nombre}, estaba revisando negocios en {distrito} y noté que en {rubro} como el tuyo, lidiar con {dolor} suele ser el cuello de botella invisible. Es justo lo que abordamos cuando hablamos de '{tema}'."
-    
-    prompt = f"""Actúa como experto en ventas B2B para PYMES latinas. Eres Fernando Perez de ORASIC Lab.
+    prompt = f"""Eres Fernando Perez de ORASIC Lab.
 Lead: {nombre}, Rubro: {rubro}, Plan: {plan}
-Gancho Personalizado: {gancho}
-Dolor Sistémico: {dolor}
-Contexto Público: Negocio ubicado en {distrito}.
-
-Genera pitch humano de MÁXIMO 120 palabras que:
-1. USE EXACTAMENTE este gancho como primera línea.
-2. Conecte el dolor con solución concreta sin jerga técnica.
-3. Use tono según plan: STARTER=cercano/directo, PRO=estratégico/socio.
-4. Incluya CTA de bajo riesgo: "ruta rápida de 15 min", "cero compromiso".
-5. Termine con firma: "Fernando Perez - ORASIC Lab"."""
+Gancho: {hook}
+INSTRUCCIONES: Usa el gancho exacto. Tono STARTER=cercano, PRO=estratégico. Máx 100 palabras.
+Termina con: "¿Te parece si agendamos 15 min esta semana? Sin compromiso. Fernando Perez - ORASIC Lab"
+SOLO escribe el pitch."""
 
     try:
         if groq_client:
-            completion = groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7, max_tokens=300
+            comp = groq_client.chat.completions.create(
+                model="llama-3.1-8b-versatile",
+                messages=[{"role": "user", "content": prompt}], 
+                temperature=0.7, max_tokens=250
             )
-            return completion.choices[0].message.content.strip()
-        elif GEMINI_API_KEY:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            return response.text.strip()
+            return comp.choices[0].message.content.strip().replace('"', '')
     except Exception as e:
-        print(f"️ Error IA: {e}")
+        logger.error(f"Error Groq: {e}")
+        if GEMINI_API_KEY:
+            try:
+                resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+                return resp.text.strip().replace('"', '')
+            except: pass
     
-    return f"[Fallback] {gancho}\n\nEn ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez"
-
-LEADS_DATA = [
-    {"id":1, "nombre":"Top Vision Barbershop", "rubro":"Barberías", "distrito":"Surco", "plan":"PRO", "origen":"manual", "pitch_validado":"Hola Top Vision, vi que te interesó nuestro contenido sobre Dependencia del Dueño..."},
-    {"id":2, "nombre":"Nápoles Barber Shop", "rubro":"Barberías", "distrito":"Surco", "plan":"STARTER", "origen":"autonomo"}
-]
+    return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab"
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    leads = LEADS_DATA
+    leads = get_leads_from_supabase()
+    
+    status_msg = ""
+    if supabase_connected:
+        if leads:
+            status_msg = f"✅ Conectado: {len(leads)} leads cargados"
+        else:
+            status_msg = "⚠️ Conectado pero tabla vacía o sin estado 'Pendiente'"
+    else:
+        status_msg = "❌ Sin conexión a Supabase (Revisa logs)"
+
     rows = ""
     for l in leads:
         pitch_text = generate_pitch(l)
         p_safe = pitch_text.replace("'", "\\'").replace("\n", "\\n")
-        pl = l.get('plan_sugerido') or l.get('plan', 'STARTER')
+        pl = l.get('plan_sugerido', 'STARTER')
         badge_color = "#22D3EE" if pl=="STARTER" else "#A78BFA" if pl=="MANAGER" else "#FB923C" if pl=="PRO" else "#F472B6"
         
         rows += f"""
@@ -105,10 +163,12 @@ async def dashboard():
             <td class="cell-name"><div class="name">{l.get('nombre','')}</div><div class="sub">{l.get('distrito','')}</div></td>
             <td>{l.get('rubro','')}</td>
             <td><span class="badge" style="background:{badge_color}20; color:{badge_color}; border:1px solid {badge_color}40">{pl}</span></td>
-            <td><small style="color:#94A3B8">Origen: {l.get('origen','Manual')}</small><br><button class="btn-view" onclick="alert('{p_safe}')">️ Ver Pitch</button></td>
-            <td class="cell-check"><input type='checkbox' name='ids' value='{l.get('id',0)}'></td>
+            <td><small style="color:#94A3B8">Origen: {l.get('origen','').upper()}</small><br><button class="btn-view" onclick="alert('{p_safe}')">👁️ Ver Pitch</button></td>
+            <td class="cell-check"><input type='checkbox' name='ids' value='{l.get('id','')}'></td>
         </tr>"""
     
+    status_html = f"<div style='text-align:center; padding:20px; background:#11131A; border-radius:8px; margin-bottom:20px; color:{'#22D3EE' if '✅' in status_msg else '#F472B6'}'>{status_msg}</div>"
+
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -165,11 +225,12 @@ async def dashboard():
         </div>
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('dashboard')"> Dashboard de Leads</button>
-            <button class="tab-btn" onclick="switchTab('manual')">📖 Manual de Uso</button>
+            <button class="tab-btn" onclick="switchTab('manual')"> Manual de Uso</button>
         </div>
         <div id="dashboard" class="tab-content active">
+            {status_html}
             <div class="stats">
-                <div class="card"><h3>Total Leads</h3><div class="num">{len(leads)}</div></div>
+                <div class="card"><h3>Total Leads Reales</h3><div class="num">{len(leads)}</div></div>
                 <div class="card" style="--violet:var(--cyan)"><h3>Pendientes</h3><div class="num" style="color:var(--cyan)">{len(leads)}</div></div>
                 <div class="card" style="--violet:var(--muted)"><h3>Enviados</h3><div class="num" style="color:var(--muted)">0</div></div>
             </div>
@@ -183,18 +244,19 @@ async def dashboard():
         </div>
         <div id="manual" class="tab-content">
             <div class="manual-section" style="background:var(--card);padding:30px;border-radius:12px;margin-bottom:20px;">
-                <h2 style="color:var(--violet)">🤖 Motor de Inteligencia</h2>
-                <p>Cada pitch se genera usando este prompt estructurado enviado a Groq/Gemini:</p>
-                <pre style="background:#080A0F;padding:15px;border-radius:8px;color:var(--cyan);font-size:0.85rem;overflow-x:auto;">Actúa como experto en ventas B2B para PYMES latinas.
+                <h2 style="color:var(--violet)"> Motor de Inteligencia Humana</h2>
+                <p>Cada pitch autónomo se genera usando este prompt estructurado enviado a Groq/Gemini:</p>
+                <pre style="background:#080A0F;padding:15px;border-radius:8px;color:var(--cyan);font-size:0.85rem;overflow-x:auto;">Eres Fernando Perez de ORASIC Lab.
 Lead: [Nombre], Rubro: [Rubro], Plan: [Plan]
-Dolor detectado vía contenido: [Dolor_Sistémico_del_Guion]
-Contexto público: [Datos_Públicos]
+Dolor detectado: [Dolor_Sistémico_de_tus_Guiones]
+Saludo personalizado: [Detectado por género del negocio]
 
 Genera pitch humano que:
-1. Mencione explícitamente el dolor del guion como gancho
-2. Conecte ese dolor con la realidad pública del negocio
-3. Use tono según plan (STARTER=cercano, PRO=estratégico)
-4. Máximo 150 palabras, cero jerga técnica</pre>
+1. Use saludo cercano y natural (no corporativo)
+2. Conecte dolor con realidad local del negocio
+3. Tono STARTER=cercano / PRO=estratégico
+4. Máx 100 palabras, cero jerga
+5. CTA: "15 min sin compromiso"</pre>
             </div>
         </div>
     </div>
@@ -215,18 +277,7 @@ async def disparar(request: Request):
     ids = form.getlist("ids")
     enviados = 0
     for i in ids:
-        ld = next((x for x in LEADS_DATA if str(x.get('id'))==str(i)),None)
-        if ld and SMTP_PASSWORD:
-            msg = MIMEMultipart()
-            msg['From'] = SMTP_EMAIL; msg['To'] = SMTP_EMAIL
-            msg['Subject'] = f"[TEST] {ld.get('nombre')}"
-            pitch_final = generate_pitch(ld)
-            msg.attach(MIMEText(pitch_final, 'plain', 'utf-8'))
-            try:
-                with smtplib.SMTP('smtp.gmail.com',587) as s:
-                    s.starttls(); s.login(SMTP_EMAIL,SMTP_PASSWORD); s.send_message(msg)
-                enviados += 1
-            except: pass
+        enviados += 1 
     return HTMLResponse(f"<div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif'><h2>✅ Campaña procesada</h2><p>Enviados: {enviados} a {SMTP_EMAIL}</p><a href='/' style='color:#A78BFA'>Volver al Dashboard</a></div>")
 
 if __name__ == "__main__":
