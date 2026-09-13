@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 import os, smtplib, random, logging, requests
 from email.mime.text import MIMEText
@@ -280,5 +280,6 @@ async def disparar(request: Request):
         enviados += 1 
     return HTMLResponse(f"<div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif'><h2>✅ Campaña procesada</h2><p>Enviados: {enviados} a {SMTP_EMAIL}</p><a href='/' style='color:#A78BFA'>Volver al Dashboard</a></div>")
 
-if __name__ == "__main__":
-    import uvicorn; uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",8000)))
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
