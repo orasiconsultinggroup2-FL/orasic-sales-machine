@@ -5,7 +5,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from groq import Groq
 import google.generativeai as genai
-from datetime import datetime # IMPORTANTE: Faltaba esto
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -85,11 +85,29 @@ def get_sent_count():
     except:
         return 0
 
-# --- MOTOR DE BÚSQUEDA AUTOMÁTICA (OPENSTREETMAP) ---
+# --- MOTOR DE BÚSQUEDA AUTOMÁTICA CON TRADUCTOR Y FILTRO INTELIGENTE ---
 
-def search_leads_osm(keyword, location, limit=20):
-    """Busca negocios en OpenStreetMap y devuelve lista limpia"""
-    url = f"https://nominatim.openstreetmap.org/search?q={keyword}+{location}&format=json&addressdetails=1&limit={limit}"
+def search_leads_osm(keyword, location, limit=50):
+    """Busca negocios en OSM con traducción automática ES->EN y filtrado por distrito"""
+    
+    # Diccionario de traducción transparente para ti
+    translations = {
+        'centros educativos': 'school', 'colegio': 'school', 'escuela': 'school', 
+        'universidad': 'university', 'instituto': 'college',
+        'gimnasio': 'gym', 'gimnasios': 'gym', 'fitness': 'gym',
+        'barbería': 'hairdresser', 'barberias': 'hairdresser', 'peluquería': 'hairdresser',
+        'restaurante': 'restaurant', 'restaurantes': 'restaurant',
+        'clínica': 'clinic', 'clinicas': 'clinic', 'consultorio': 'doctors',
+        'dentista': 'dentist', 'veterinaria': 'veterinary'
+    }
+    
+    # Traducir automáticamente (si no está en lista, usa lo que escribiste)
+    search_term = translations.get(keyword.lower().strip(), keyword)
+    
+    # Buscar en toda Lima para no perder leads, luego filtramos por distrito
+    city_search = "Lima" if "lima" in location.lower() else location
+    
+    url = f"https://nominatim.openstreetmap.org/search?q={search_term}+{city_search}&format=json&addressdetails=1&limit={limit}"
     headers = {'User-Agent': 'OrasicSalesMachine/1.0'} 
     
     try:
@@ -98,35 +116,50 @@ def search_leads_osm(keyword, location, limit=20):
             data = resp.json()
             new_leads = []
             
-            # Obtener nombres existentes para evitar duplicados
             existing_leads = get_leads("Pendiente") + get_leads("Enviado")
             existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
             
+            # Preparar palabras clave del distrito para filtrar
+            target_district = location.lower().replace(',', '').strip()
+            district_keywords = [kw for kw in target_district.split() if len(kw) > 2]
+            
             for place in data:
-                name = place.get('display_name', '').split(',')[0].strip()
+                raw_name = place.get('display_name', '').split(',')[0].strip()
+                name = raw_name.split(' - ')[0].split('(')[0].strip() 
                 
-                # Filtro anti-duplicados y longitud mínima
-                if name.lower() not in existing_names and len(name) > 3:
-                    address = place.get('address', {})
-                    district = address.get('suburb', address.get('city_district', location))
+                # Evitar duplicados y nombres basura
+                if name.lower() in existing_names or len(name) <= 3:
+                    continue
+                
+                address = place.get('address', {})
+                full_address = place.get('display_name', '').lower()
+                
+                # Filtrado inteligente: ¿La dirección contiene "Surco" o "Santiago"?
+                is_match = any(kw in full_address for kw in district_keywords)
+                
+                if not is_match:
+                    osm_district = (address.get('suburb') or address.get('city_district') or '')
+                    if any(kw in osm_district.lower() for kw in district_keywords):
+                        is_match = True
+
+                if is_match:
+                    district_name = (address.get('suburb') or address.get('city_district') or location).title()
                     
-                    # Lógica de asignación de plan
                     plan = "STARTER"
                     k_lower = keyword.lower()
-                    if any(k in k_lower for k in ['clinica', 'hospital', 'gym', 'gimnasio']): 
+                    if any(k in k_lower for k in ['clinica', 'hospital', 'gym', 'gimnasio', 'colegio', 'universidad', 'escuela']): 
                         plan = "PRO"
-                    elif 'barber' in k_lower or 'pelu' in k_lower: 
-                        plan = "STARTER" 
                     
                     lead = {
                         "nombre": name,
                         "rubro": keyword.capitalize(),
-                        "distrito": district if district else location,
+                        "distrito": district_name,
                         "plan_sugerido": plan,
                         "origen": "AUTO_OSM",
                         "estado": "Pendiente",
                         "email": "", 
                         "telefono": "",
+                        "direccion_completa": place.get('display_name', ''),
                         "created_at": datetime.now().isoformat()
                     }
                     new_leads.append(lead)
@@ -135,7 +168,7 @@ def search_leads_osm(keyword, location, limit=20):
             return new_leads
         return []
     except Exception as e:
-        logger.error(f"Error buscando en OSM: {e}")
+        logger.error(f"Error OSM: {e}")
         return []
 
 @app.post("/api/auto-search")
@@ -145,29 +178,58 @@ async def auto_search(request: Request):
     location = form.get("location", "Lima")
     limit = min(int(form.get("limit", 10)), 50)
     
-    # Respetar rate limit de Nominatim
-    time.sleep(1.1) 
+    time.sleep(1.1) # Respetar límites de OSM
     
     new_leads = search_leads_osm(keyword, location, limit)
     
-    # Guardar en Supabase
-    saved_count = 0
-    if supabase_connected and new_leads:
-        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-        url = f"{SUPABASE_URL}/rest/v1/leads"
-        
-        resp = requests.post(url, headers=headers, json=new_leads, timeout=10)
-        if resp.status_code == 201:
-            saved_count = len(new_leads)
-        else:
-            logger.error(f"Error guardando en Supabase: {resp.status_code}")
-    
+    # Generar HTML de la tabla de vista previa
+    rows_html = ""
+    if new_leads:
+        for i, lead in enumerate(new_leads, 1):
+            rows_html += f"""
+            <tr style="border-bottom: 1px solid #1E293B;">
+                <td style="padding:12px; color:#A78BFA; font-weight:bold;">#{i}</td>
+                <td style="padding:12px; font-weight:bold; color:white;">{lead['nombre']}</td>
+                <td style="padding:12px;">{lead['rubro']}</td>
+                <td style="padding:12px;">{lead['distrito']}</td>
+                <td style="padding:12px;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.75rem; font-weight:bold;">{lead['plan_sugerido']}</span></td>
+                <td style="padding:12px; color:#64748b; font-size:0.8rem; max-width:300px;">{lead['direccion_completa'][:70]}...</td>
+            </tr>
+            """
+    else:
+        rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#94A3B8;'>No se encontraron negocios nuevos con estos criterios en esa zona.</td></tr>"
+
     return HTMLResponse(f"""
-    <div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;'>
-        <h2 style='color:#22D3EE'>🔍 Búsqueda Completada</h2>
-        <p style='font-size:1.2rem;margin:20px 0'>Encontrados: <strong>{len(new_leads)}</strong> negocios nuevos.</p>
-        <p style='color:#94A3B8'>Guardados en BD: <strong>{saved_count}</strong></p>
-        <a href='/' style='margin-top:30px;color:#A78BFA;text-decoration:none;border:1px solid #A78BFA;padding:10px 20px;border-radius:8px;'>Volver al Dashboard</a>
+    <div style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;min-height:100vh;'>
+        <div style='max-width:1100px; margin:0 auto;'>
+            <h2 style='color:#22D3EE; margin-bottom:10px;'>🔍 Resultados: "{keyword}" en {location}</h2>
+            <p style='margin-bottom:30px; color:#94A3B8;'>Se encontraron <strong>{len(new_leads)}</strong> negocios potenciales. Revisa los datos antes de importar:</p>
+            
+            <div style='overflow-x:auto; background:#11131A; border-radius:12px; border:1px solid #1E293B; margin-bottom:30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);'>
+                <table style='width:100%; border-collapse:collapse;'>
+                    <thead>
+                        <tr style='background:#1E293B; text-align:left; color:#94A3B8; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;'>
+                            <th style='padding:15px;'>#</th>
+                            <th style='padding:15px;'>Nombre del Negocio</th>
+                            <th style='padding:15px;'>Rubro</th>
+                            <th style='padding:15px;'>Distrito</th>
+                            <th style='padding:15px;'>Plan Sugerido</th>
+                            <th style='padding:15px;'>Ubicación Exacta</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+            </div>
+
+            <div style='display:flex; gap:15px; justify-content:center; margin-top:40px;'>
+                <a href='/' style='padding:14px 28px; background:transparent; border:1px solid #A78BFA; color:#A78BFA; border-radius:8px; text-decoration:none; font-weight:bold; transition:all 0.3s;'>Volver al Dashboard</a>
+            </div>
+            
+            <p style='margin-top:40px; font-size:0.8rem; color:#475569; text-align:center; line-height:1.6;'>
+                * OpenStreetMap proporciona ubicaciones precisas pero rara vez emails/teléfonos directos.<br>
+                Para datos de contacto completos, usa el importador CSV de Claude después de validar esta lista.
+            </p>
+        </div>
     </div>""")
 
 # --- NORMALIZACIÓN LINGÜÍSTICA PERFECTA ---
