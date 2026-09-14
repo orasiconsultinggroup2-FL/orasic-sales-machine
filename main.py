@@ -45,7 +45,7 @@ SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
 def get_leads_from_supabase():
-    """Obtiene leads usando REST API directa"""
+    """Obtiene leads pendientes usando REST API directa"""
     if not supabase_connected:
         return []
     
@@ -55,6 +55,8 @@ def get_leads_from_supabase():
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json"
         }
+        # Nota: Asegúrate que el campo en tu DB sea 'estado' o 'status'. 
+        # Aquí uso 'estado' como en tu código original, pero verifica si es 'status'.
         url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&limit=100"
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -68,6 +70,30 @@ def get_leads_from_supabase():
     except Exception as e:
         logger.error(f"Excepción obteniendo leads: {e}")
         return []
+
+def get_sent_count():
+    """Obtiene el conteo de leads enviados para las estadísticas"""
+    if not supabase_connected:
+        return 0
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "count=exact"
+        }
+        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id"
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            # La cabecera Content-Range contiene el conteo total
+            content_range = response.headers.get('Content-Range', '')
+            count = int(content_range.split('/')[-1]) if '/' in content_range else 0
+            return count
+        return 0
+    except Exception as e:
+        logger.error(f"Error getting sent count: {e}")
+        return 0
 
 # --- NORMALIZACIÓN LINGÜÍSTICA PERFECTA ---
 def normalize_lead_text(lead_data):
@@ -141,6 +167,7 @@ SOLO escribe el pitch."""
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads = get_leads_from_supabase()
+    sent_count = get_sent_count()  # NUEVO: Conteo real de enviados
     
     status_msg = ""
     if supabase_connected:
@@ -152,14 +179,17 @@ async def dashboard():
         status_msg = "❌ Sin conexión a Supabase (Revisa logs)"
 
     rows = ""
-    for l in leads:
+    # NUMERACIÓN DE LEDS (Enumerate start=1)
+    for idx, l in enumerate(leads, start=1):
         pitch_text = generate_pitch(l)
         p_safe = pitch_text.replace("'", "\\'").replace("\n", "\\n")
         pl = l.get('plan_sugerido', 'STARTER')
         badge_color = "#22D3EE" if pl=="STARTER" else "#A78BFA" if pl=="MANAGER" else "#FB923C" if pl=="PRO" else "#F472B6"
         
+        # Columna # agregada al inicio de cada fila
         rows += f"""
         <tr>
+            <td style="font-weight:bold; color:var(--violet); width:50px; text-align:center;">#{idx}</td>
             <td class="cell-name"><div class="name">{l.get('nombre','')}</div><div class="sub">{l.get('distrito','')}</div></td>
             <td>{l.get('rubro','')}</td>
             <td><span class="badge" style="background:{badge_color}20; color:{badge_color}; border:1px solid {badge_color}40">{pl}</span></td>
@@ -167,6 +197,8 @@ async def dashboard():
             <td class="cell-check"><input type='checkbox' name='ids' value='{l.get('id','')}'></td>
         </tr>"""
     
+    total_leads = len(leads)
+    pending_leads = total_leads  # Como solo cargamos pendientes, son iguales
     status_html = f"<div style='text-align:center; padding:20px; background:#11131A; border-radius:8px; margin-bottom:20px; color:{'#22D3EE' if '✅' in status_msg else '#F472B6'}'>{status_msg}</div>"
 
     return f"""<!DOCTYPE html>
@@ -219,7 +251,7 @@ async def dashboard():
                 <div class="logo-icon">O</div>
                 <div class="brand">
                     <h1>ORASIC <span>Sales Machine</span></h1>
-                    <small>by NIROMA Labs • v1.0</small>
+                    <small>by NIROMA Labs • v1.1</small>
                 </div>
             </div>
         </div>
@@ -230,13 +262,15 @@ async def dashboard():
         <div id="dashboard" class="tab-content active">
             {status_html}
             <div class="stats">
-                <div class="card"><h3>Total Leads Reales</h3><div class="num">{len(leads)}</div></div>
-                <div class="card" style="--violet:var(--cyan)"><h3>Pendientes</h3><div class="num" style="color:var(--cyan)">{len(leads)}</div></div>
-                <div class="card" style="--violet:var(--muted)"><h3>Enviados</h3><div class="num" style="color:var(--muted)">0</div></div>
+                <div class="card"><h3>Total Leads Reales</h3><div class="num">{total_leads}</div></div>
+                <div class="card" style="--violet:var(--cyan)"><h3>Pendientes</h3><div class="num" style="color:var(--cyan)">{pending_leads}</div></div>
+                <!-- CONTADOR REAL DE ENVIADOS -->
+                <div class="card" style="--violet:var(--muted)"><h3>Enviados</h3><div class="num" style="color:var(--muted)">{sent_count}</div></div>
             </div>
             <form action="/disparar" method="post">
                 <table>
-                    <thead><tr><th>Negocio / Ubicación</th><th>Rubro</th><th>Plan</th><th>Pitch</th><th>Enviar</th></tr></thead>
+                    <!-- COLUMNA # AGREGADA AL HEADER -->
+                    <thead><tr><th>#</th><th>Negocio / Ubicación</th><th>Rubro</th><th>Plan</th><th>Pitch</th><th>Enviar</th></tr></thead>
                     <tbody>{rows}</tbody>
                 </table>
                 <div class="actions"><button type="submit" class="btn-disparar"> DISPARAR SELECCIONADOS</button></div>
@@ -276,9 +310,34 @@ async def disparar(request: Request):
     form = await request.form()
     ids = form.getlist("ids")
     enviados = 0
-    for i in ids:
-        enviados += 1 
-    return HTMLResponse(f"<div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif'><h2>✅ Campaña procesada</h2><p>Enviados: {enviados} a {SMTP_EMAIL}</p><a href='/' style='color:#A78BFA'>Volver al Dashboard</a></div>")
+    
+    # Actualizar estado en Supabase vía REST API
+    if supabase_connected and ids:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        for lead_id in ids:
+            try:
+                update_url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
+                payload = {"estado": "Enviado"}  # Asegúrate que el campo sea 'estado'
+                resp = requests.patch(update_url, headers=headers, json=payload, timeout=5)
+                if resp.status_code == 200 or resp.status_code == 204:
+                    enviados += 1
+                else:
+                    logger.error(f"Error updating lead {lead_id}: {resp.status_code}")
+            except Exception as e:
+                logger.error(f"Exception updating lead {lead_id}: {e}")
+            
+    return HTMLResponse(f"""
+    <div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;'>
+        <h2 style='color:#22D3EE'>✅ Campaña procesada</h2>
+        <p style='font-size:1.2rem;margin:20px 0'>Enviados: <strong>{enviados}</strong> leads</p>
+        <p style='color:#94A3B8'>Los estados han sido actualizados en Supabase.</p>
+        <a href='/' style='margin-top:30px;color:#A78BFA;text-decoration:none;border:1px solid #A78BFA;padding:10px 20px;border-radius:8px;'>Volver al Dashboard</a>
+    </div>""")
 
 # if __name__ == "__main__":
 #     import uvicorn
