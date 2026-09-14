@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-import os, smtplib, random, logging, requests
+import os, smtplib, random, logging, requests, time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from groq import Groq
 import google.generativeai as genai
+from datetime import datetime # IMPORTANTE: Faltaba esto
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,8 +45,10 @@ genai.configure(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
-def get_leads_from_supabase():
-    """Obtiene leads pendientes usando REST API directa"""
+# --- FUNCIONES DE DATOS ---
+
+def get_leads(status="Pendiente"):
+    """Obtiene leads por estado usando REST API directa"""
     if not supabase_connected:
         return []
     
@@ -55,45 +58,117 @@ def get_leads_from_supabase():
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json"
         }
-        # Nota: Asegúrate que el campo en tu DB sea 'estado' o 'status'. 
-        # Aquí uso 'estado' como en tu código original, pero verifica si es 'status'.
-        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&limit=100"
+        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.{status}&limit=200"
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            data = response.json()
-            logger.info(f"✅ Cargados {len(data)} leads reales vía REST")
-            return data
-        else:
-            logger.error(f"Error fetching leads: {response.status_code} - {response.text[:200]}")
-            return []
+            return response.json()
+        return []
     except Exception as e:
-        logger.error(f"Excepción obteniendo leads: {e}")
+        logger.error(f"Error obteniendo leads ({status}): {e}")
         return []
 
 def get_sent_count():
-    """Obtiene el conteo de leads enviados para las estadísticas"""
+    """Obtiene el conteo real de leads enviados"""
     if not supabase_connected:
         return 0
     try:
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
             "Prefer": "count=exact"
         }
         url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id"
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            # La cabecera Content-Range contiene el conteo total
-            content_range = response.headers.get('Content-Range', '')
-            count = int(content_range.split('/')[-1]) if '/' in content_range else 0
-            return count
+        resp = requests.get(url, headers=headers, timeout=5)
+        range_header = resp.headers.get('Content-Range', '')
+        return int(range_header.split('/')[-1]) if '/' in range_header else 0
+    except:
         return 0
+
+# --- MOTOR DE BÚSQUEDA AUTOMÁTICA (OPENSTREETMAP) ---
+
+def search_leads_osm(keyword, location, limit=20):
+    """Busca negocios en OpenStreetMap y devuelve lista limpia"""
+    url = f"https://nominatim.openstreetmap.org/search?q={keyword}+{location}&format=json&addressdetails=1&limit={limit}"
+    headers = {'User-Agent': 'OrasicSalesMachine/1.0'} 
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            new_leads = []
+            
+            # Obtener nombres existentes para evitar duplicados
+            existing_leads = get_leads("Pendiente") + get_leads("Enviado")
+            existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+            
+            for place in data:
+                name = place.get('display_name', '').split(',')[0].strip()
+                
+                # Filtro anti-duplicados y longitud mínima
+                if name.lower() not in existing_names and len(name) > 3:
+                    address = place.get('address', {})
+                    district = address.get('suburb', address.get('city_district', location))
+                    
+                    # Lógica de asignación de plan
+                    plan = "STARTER"
+                    k_lower = keyword.lower()
+                    if any(k in k_lower for k in ['clinica', 'hospital', 'gym', 'gimnasio']): 
+                        plan = "PRO"
+                    elif 'barber' in k_lower or 'pelu' in k_lower: 
+                        plan = "STARTER" 
+                    
+                    lead = {
+                        "nombre": name,
+                        "rubro": keyword.capitalize(),
+                        "distrito": district if district else location,
+                        "plan_sugerido": plan,
+                        "origen": "AUTO_OSM",
+                        "estado": "Pendiente",
+                        "email": "", 
+                        "telefono": "",
+                        "created_at": datetime.now().isoformat()
+                    }
+                    new_leads.append(lead)
+                    existing_names.add(name.lower()) 
+            
+            return new_leads
+        return []
     except Exception as e:
-        logger.error(f"Error getting sent count: {e}")
-        return 0
+        logger.error(f"Error buscando en OSM: {e}")
+        return []
+
+@app.post("/api/auto-search")
+async def auto_search(request: Request):
+    form = await request.form()
+    keyword = form.get("keyword", "barberia")
+    location = form.get("location", "Lima")
+    limit = min(int(form.get("limit", 10)), 50)
+    
+    # Respetar rate limit de Nominatim
+    time.sleep(1.1) 
+    
+    new_leads = search_leads_osm(keyword, location, limit)
+    
+    # Guardar en Supabase
+    saved_count = 0
+    if supabase_connected and new_leads:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        url = f"{SUPABASE_URL}/rest/v1/leads"
+        
+        resp = requests.post(url, headers=headers, json=new_leads, timeout=10)
+        if resp.status_code == 201:
+            saved_count = len(new_leads)
+        else:
+            logger.error(f"Error guardando en Supabase: {resp.status_code}")
+    
+    return HTMLResponse(f"""
+    <div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;'>
+        <h2 style='color:#22D3EE'>🔍 Búsqueda Completada</h2>
+        <p style='font-size:1.2rem;margin:20px 0'>Encontrados: <strong>{len(new_leads)}</strong> negocios nuevos.</p>
+        <p style='color:#94A3B8'>Guardados en BD: <strong>{saved_count}</strong></p>
+        <a href='/' style='margin-top:30px;color:#A78BFA;text-decoration:none;border:1px solid #A78BFA;padding:10px 20px;border-radius:8px;'>Volver al Dashboard</a>
+    </div>""")
 
 # --- NORMALIZACIÓN LINGÜÍSTICA PERFECTA ---
 def normalize_lead_text(lead_data):
@@ -166,8 +241,8 @@ SOLO escribe el pitch."""
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    leads = get_leads_from_supabase()
-    sent_count = get_sent_count()  # NUEVO: Conteo real de enviados
+    leads = get_leads("Pendiente")
+    sent_count = get_sent_count()
     
     status_msg = ""
     if supabase_connected:
@@ -179,14 +254,12 @@ async def dashboard():
         status_msg = "❌ Sin conexión a Supabase (Revisa logs)"
 
     rows = ""
-    # NUMERACIÓN DE LEDS (Enumerate start=1)
     for idx, l in enumerate(leads, start=1):
         pitch_text = generate_pitch(l)
         p_safe = pitch_text.replace("'", "\\'").replace("\n", "\\n")
         pl = l.get('plan_sugerido', 'STARTER')
         badge_color = "#22D3EE" if pl=="STARTER" else "#A78BFA" if pl=="MANAGER" else "#FB923C" if pl=="PRO" else "#F472B6"
         
-        # Columna # agregada al inicio de cada fila
         rows += f"""
         <tr>
             <td style="font-weight:bold; color:var(--violet); width:50px; text-align:center;">#{idx}</td>
@@ -198,7 +271,7 @@ async def dashboard():
         </tr>"""
     
     total_leads = len(leads)
-    pending_leads = total_leads  # Como solo cargamos pendientes, son iguales
+    pending_leads = total_leads
     status_html = f"<div style='text-align:center; padding:20px; background:#11131A; border-radius:8px; margin-bottom:20px; color:{'#22D3EE' if '✅' in status_msg else '#F472B6'}'>{status_msg}</div>"
 
     return f"""<!DOCTYPE html>
@@ -251,7 +324,7 @@ async def dashboard():
                 <div class="logo-icon">O</div>
                 <div class="brand">
                     <h1>ORASIC <span>Sales Machine</span></h1>
-                    <small>by NIROMA Labs • v1.1</small>
+                    <small>by NIROMA Labs • v1.2</small>
                 </div>
             </div>
         </div>
@@ -264,12 +337,39 @@ async def dashboard():
             <div class="stats">
                 <div class="card"><h3>Total Leads Reales</h3><div class="num">{total_leads}</div></div>
                 <div class="card" style="--violet:var(--cyan)"><h3>Pendientes</h3><div class="num" style="color:var(--cyan)">{pending_leads}</div></div>
-                <!-- CONTADOR REAL DE ENVIADOS -->
                 <div class="card" style="--violet:var(--muted)"><h3>Enviados</h3><div class="num" style="color:var(--muted)">{sent_count}</div></div>
             </div>
+            
+            <!-- MOTOR DE PROSPECCIÓN AUTOMÁTICA -->
+            <div class="card" style="margin-bottom:30px; border:1px solid var(--violet);">
+                <h3 style="color:var(--violet); margin-bottom:15px;">🤖 Motor de Prospección Automática (OpenStreetMap)</h3>
+                <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
+                    <div style="flex:1; min-width:200px;">
+                        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Rubro / Keyword</label>
+                        <input type="text" name="keyword" value="Barbería" required 
+                               style="width:100%; padding:10px; background:var(--bg); border:1px solid var(--border); color:white; border-radius:6px;">
+                    </div>
+                    <div style="flex:1; min-width:200px;">
+                        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Ubicación</label>
+                        <input type="text" name="location" value="Santiago de Surco, Lima" required 
+                               style="width:100%; padding:10px; background:var(--bg); border:1px solid var(--border); color:white; border-radius:6px;">
+                    </div>
+                    <div style="width:100px;">
+                        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Cantidad</label>
+                        <input type="number" name="limit" value="10" min="1" max="50" 
+                               style="width:100%; padding:10px; background:var(--bg); border:1px solid var(--border); color:white; border-radius:6px;">
+                    </div>
+                    <button type="submit" class="btn-disparar" style="padding:10px 20px; font-size:0.9rem;">
+                        🔎 Buscar Leads
+                    </button>
+                </form>
+                <p style="font-size:0.75rem; color:var(--muted); margin-top:10px;">
+                    * Fuente: OpenStreetMap (Gratis). Datos básicos. Para emails/teléfonos usa el importador CSV de Claude.
+                </p>
+            </div>
+
             <form action="/disparar" method="post">
                 <table>
-                    <!-- COLUMNA # AGREGADA AL HEADER -->
                     <thead><tr><th>#</th><th>Negocio / Ubicación</th><th>Rubro</th><th>Plan</th><th>Pitch</th><th>Enviar</th></tr></thead>
                     <tbody>{rows}</tbody>
                 </table>
@@ -311,7 +411,6 @@ async def disparar(request: Request):
     ids = form.getlist("ids")
     enviados = 0
     
-    # Actualizar estado en Supabase vía REST API
     if supabase_connected and ids:
         headers = {
             "apikey": SUPABASE_KEY,
@@ -322,14 +421,12 @@ async def disparar(request: Request):
         for lead_id in ids:
             try:
                 update_url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
-                payload = {"estado": "Enviado"}  # Asegúrate que el campo sea 'estado'
+                payload = {"estado": "Enviado"}
                 resp = requests.patch(update_url, headers=headers, json=payload, timeout=5)
-                if resp.status_code == 200 or resp.status_code == 204:
+                if resp.status_code in [200, 204]:
                     enviados += 1
-                else:
-                    logger.error(f"Error updating lead {lead_id}: {resp.status_code}")
             except Exception as e:
-                logger.error(f"Exception updating lead {lead_id}: {e}")
+                logger.error(f"Error updating lead {lead_id}: {e}")
             
     return HTMLResponse(f"""
     <div style='background:#080A0F;color:white;padding:40px;text-align:center;font-family:sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;'>
