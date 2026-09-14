@@ -1,18 +1,18 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-import os, smtplib, random, logging, requests, time
+import os, smtplib, random, logging, requests, time, json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from groq import Groq
-import google.generativeai as genai
 from datetime import datetime
+import google.generativeai as genai
 
+# Configuración de logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# CONFIGURACIÓN SUPABASE VIA REST API DIRECTA
+# CONFIGURACIÓN SUPABASE VIA REST API DIRECTA (INTACTA)
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase_connected = False
@@ -31,16 +31,56 @@ if SUPABASE_URL and SUPABASE_KEY:
             supabase_connected = True
             logger.info(f"✅ Conexión REST a Supabase exitosa: {SUPABASE_URL}")
         else:
-            logger.error(f"❌ Error REST Supabase: {response.status_code} - {response.text[:200]}")
+            logger.error(f" Error REST Supabase: {response.status_code} - {response.text[:200]}")
     except Exception as e:
         logger.error(f"❌ Excepción conectando a Supabase: {e}")
 else:
     logger.warning("⚠️ Faltan variables SUPABASE_URL o SUPABASE_KEY")
 
+# CONFIGURACIÓN GROQ SIN LIBRERÍA EXTERNA (FIX RAILWAY CRASH)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-genai.configure(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+def call_groq_api(prompt_text):
+    """Llama a Groq via requests nativos para evitar conflicto httpx en Railway"""
+    if not GROQ_API_KEY: 
+        logger.warning("⚠️ GROQ_API_KEY no configurada")
+        return None
+    
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "llama-3.1-8b-versatile",
+        "messages": [{"role": "user", "content": prompt_text}],
+        "temperature": 0.7,
+        "max_tokens": 250
+    }
+    
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            result = response.json()["choices"][0]["message"]["content"].strip()
+            return result.replace('"', '').replace("'", "")
+        else:
+            logger.error(f"❌ Error Groq API: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.error(f" Excepción Groq: {e}")
+        return None
+
+# Configurar Gemini si está disponible
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
@@ -284,21 +324,20 @@ Termina con: "¿Te parece si agendamos 15 min esta semana? Sin compromiso. Ferna
 SOLO escribe el pitch."""
 
     try:
-        if groq_client:
-            comp = groq_client.chat.completions.create(
-                model="llama-3.1-8b-versatile",
-                messages=[{"role": "user", "content": prompt}], 
-                temperature=0.7, max_tokens=250
-            )
-            return comp.choices[0].message.content.strip().replace('"', '')
-    except Exception as e:
-        logger.error(f"Error Groq: {e}")
+        # USAMOS LA NUEVA FUNCIÓN DIRECTA EN LUGAR DE groq_client
+        pitch = call_groq_api(prompt)
+        if pitch:
+            return pitch
+            
+        # Fallback a Gemini si Groq falla
         if GEMINI_API_KEY:
-            try:
-                resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
-                return resp.text.strip().replace('"', '')
-            except: pass
+            resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+            return resp.text.strip().replace('"', '')
+            
+    except Exception as e:
+        logger.error(f"Error generando pitch: {e}")
     
+    # Fallback final si todo falla
     return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab"
 
 @app.get("/", response_class=HTMLResponse)
@@ -404,7 +443,7 @@ async def dashboard():
             
             <!-- MOTOR DE PROSPECCIÓN AUTOMÁTICA -->
             <div class="card" style="margin-bottom:30px; border:1px solid var(--violet);">
-                <h3 style="color:var(--violet); margin-bottom:15px;">🤖 Motor de Prospección Automática (OpenStreetMap)</h3>
+                <h3 style="color:var(--violet); margin-bottom:15px;"> Motor de Prospección Automática (OpenStreetMap)</h3>
                 <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
                     <div style="flex:1; min-width:200px;">
                         <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Rubro / Keyword</label>
