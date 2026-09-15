@@ -338,8 +338,8 @@ SOLO escribe el pitch."""
         logger.error(f"Error generando pitch: {e}")
     
     # Fallback final si todo falla
-    return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab
-"@app.get("/", response_class=HTMLResponse)
+    return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab"
+@app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads = get_leads("Pendiente")
     sent_count = get_sent_count()
