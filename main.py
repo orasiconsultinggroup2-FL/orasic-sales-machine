@@ -27,7 +27,6 @@ if SUPABASE_URL and SUPABASE_KEY:
         test_url = f"{SUPABASE_URL}/rest/v1/leads?select=id&limit=1"
         response = requests.get(test_url, headers=headers, timeout=5)
         
-        # ✅ Corrección definitiva sin corchetes para evitar que el sistema borre la lógica
         if response.status_code == 200:
             supabase_connected = True
             logger.info(f"✅ Conexión REST a Supabase exitosa: {SUPABASE_URL}")
@@ -38,7 +37,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     logger.warning("⚠️ Faltan variables SUPABASE_URL o SUPABASE_KEY")
 
-# CONFIGURACIÓN GROQ SIN LIBRERÍA EXTERNA
+# CONFIGURACIÓN GROQ Y GEMINI
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -53,11 +52,14 @@ def call_groq_api(prompt_text):
     try:
         response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            return response.json()["choices"]["message"]["content"].strip().replace('"', '').replace("'", "")
-    except: return None
+            return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
+    except: 
+        return None
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
+# --- FUNCIONES DE DATOS ---
 
 def get_leads(status="Pendiente"):
     if not supabase_connected: return []
@@ -66,7 +68,8 @@ def get_leads(status="Pendiente"):
         url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.{status}&limit=200"
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
-    except: return []
+    except: 
+        return []
 
 def get_sent_count():
     if not supabase_connected: return 0
@@ -74,18 +77,21 @@ def get_sent_count():
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "count=exact"}
         resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id", headers=headers, timeout=5)
         return int(resp.headers.get('Content-Range', '').split('/')[-1]) if '/' in resp.headers.get('Content-Range', '') else 0
-    except: return 0
+    except: 
+        return 0
 
 def insert_lead_supabase(lead):
     if not supabase_connected: return False
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=headers, json=lead, timeout=5)
-        # ✅ Validación numérica segura
         if resp.status_code == 200 or resp.status_code == 201 or resp.status_code == 204:
             return True
         return False
-    except: return False
+    except: 
+        return False
+
+# --- MOTOR DE BÚSQUEDA AUTOMÁTICAAbierto MEDIANTE IA ---
 
 def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
@@ -144,7 +150,7 @@ def search_leads_google(keyword, location, limit=100):
 
             lead = {
                 "nombre": name, "rubro": rubro_clean, "distrito": location.title(), "plan_sugerido": plan_assigned,  
-                "criterio_match": criterio_match, "origen": "GOOGLE_MAPS", "estado": "Pendiente",
+                "criterio_match": criterion_match, "origen": "GOOGLE_MAPS", "estado": "Pendiente",
                 "direccion_completa": place.get("formattedAddress", ""), "pitch_automatizado": pitch_personalizado,
                 "datos_originales": {"Categoria": rubro_clean, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
                 "created_at": datetime.now().isoformat()
@@ -152,7 +158,8 @@ def search_leads_google(keyword, location, limit=100):
             new_leads.append(lead)
             existing_names.add(name.lower())
         return new_leads
-    except: return []
+    except: 
+        return []
 
 @app.post("/api/auto-search")
 async def auto_search(request: Request):
