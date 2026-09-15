@@ -537,5 +537,9 @@ async def disparar(request: Request):
     </div>""")
 
 if __name__ == "__main__":
-     import uvicorn
-     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    import os
+    import uvicorn
+    
+    # Lee el puerto asignado por Railway o usa el 8000 por defecto de forma local
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
