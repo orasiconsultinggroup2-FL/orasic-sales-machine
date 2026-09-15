@@ -466,8 +466,8 @@ async def dashboard():
             </div>
             
             <!-- MOTOR DE PROSPECCIÓN AUTOMÁTICA -->
-            <div class="card" style="margin-bottom:30px; border:1px solid var(--violet);">
-                <h3 style="color:var(--violet); margin-bottom:15px;"> Motor de Prospección Automática (OpenStreetMap)</h3>
+                        <div class="card" style="margin-bottom:30px; border:1px solid var(--violet);">
+                <h3 style="color:var(--violet); margin-bottom:15px;">🚀 Motor de Prospección Automática (Google Places API)</h3>
                 <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
                     <div style="flex:1; min-width:200px;">
                         <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Rubro / Keyword</label>
@@ -481,7 +481,7 @@ async def dashboard():
                     </div>
                     <div style="width:100px;">
                         <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:5px;">Cantidad</label>
-                        <input type="number" name="limit" value="10" min="1" max="50" 
+                        <input type="number" name="limit" value="100" min="1" max="100" 
                                style="width:100%; padding:10px; background:var(--bg); border:1px solid var(--border); color:white; border-radius:6px;">
                     </div>
                     <button type="submit" class="btn-disparar" style="padding:10px 20px; font-size:0.9rem;">
@@ -489,7 +489,7 @@ async def dashboard():
                     </button>
                 </form>
                 <p style="font-size:0.75rem; color:var(--muted); margin-top:10px;">
-                    * Fuente: OpenStreetMap (Gratis). Datos básicos. Para emails/teléfonos usa el importador CSV de Claude.
+                    * Fuente: Google Cloud (Orasic Sales Machine). Plan v4.1 inyectado de forma automatizada.
                 </p>
             </div>
 
@@ -509,7 +509,6 @@ async def dashboard():
 Lead: [Nombre], Rubro: [Rubro], Plan: [Plan]
 Dolor detectado: [Dolor_Sistémico_de_tus_Guiones]
 Saludo personalizado: [Detectado por género del negocio]
-
 Genera pitch humano que:
 1. Use saludo cercano y natural (no corporativo)
 2. Conecte dolor con realidad local del negocio
