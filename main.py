@@ -46,7 +46,7 @@ def call_groq_api(prompt_text):
     try:
         response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
+            return response.json()["choices"]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: return None
 
 if GEMINI_API_KEY:
@@ -109,7 +109,7 @@ def search_leads_google(keyword, location, limit=100):
             tipo_google = place.get('primaryType', 'Desconocido')
             
             prompt_clasificacion = f'Clasifica la empresa "{name}" (Rubro: {rubro_clean}, GoogleType: {tipo_google}) en STARTER, MANAGER, PRO o CUSTOM. Responde solo JSON sin markdown: {{"plan": "VALOR", "criterio": "RAZON"}}'
-            plan_asignado = "STARTER"
+            plan_assigned = "STARTER"
             criterio_match = "Clasificación base."
 
             try:
@@ -124,16 +124,16 @@ def search_leads_google(keyword, location, limit=100):
                 if respuesta_ia:
                     respuesta_ia = respuesta_ia.replace("```json", "").replace("```", "").strip()
                     data_json = json.loads(respuesta_ia)
-                    plan_asignado = data_json.get("plan", "STARTER").upper().strip()
+                    plan_assigned = data_json.get("plan", "STARTER").upper().strip()
                     criterio_match = data_json.get("criterio", "Mapeado por IA.")
             except:
                 if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante", "chifa"]):
-                    plan_asignado = "MANAGER"
+                    plan_assigned = "MANAGER"
 
-            pitch_personalizado = PITCHES.get(plan_asignado, PITCHES["STARTER"]).format(nombre=name)
+            pitch_personalizado = PITCHES.get(plan_assigned, PITCHES["STARTER"]).format(nombre=name)
 
             lead = {
-                "nombre": name, "rubro": rubro_clean, "distrito": location.title(), "plan_sugerido": plan_asignado,  
+                "nombre": name, "rubro": rubro_clean, "distrito": location.title(), "plan_sugerido": plan_assigned,  
                 "criterio_match": criterio_match, "origen": "GOOGLE_MAPS", "estado": "Pendiente",
                 "direccion_completa": place.get("formattedAddress", ""), "pitch_automatizado": pitch_personalizado,
                 "datos_originales": {"Categoria": rubro_clean, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
@@ -177,11 +177,10 @@ async def import_personal_csv(request: Request):
             distrito = row.get("Distrito", "").strip()
             direccion = row.get("Direccion", "").strip()
             
-            plan_asignado = "STARTER"
+            plan_assigned = "STARTER"
             if any(k in rubro.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "spa", "restaurante", "chifa"]):
-                plan_asignado = "MANAGER"
+                plan_assigned = "MANAGER"
             
             lead_estructurado = {
                 "nombre": nombre, "rubro": rubro, "distrito": distrito, "direccion_completa": direccion,
-                "plan_sugerido": plan_asignado, "criterio_match": "Importado vía Excel Enriquecido.",
-
+                "plan_sugerido": plan_assigned, "criterio_match": "Importado vía Excel Enriquecido.",
