@@ -127,10 +127,9 @@ def get_sent_count():
 
 # --- MOTOR DE BÚSQUEDA AUTOMÁTICA CON TRADUCTOR Y FILTRO INTELIGENTE ---
 
-def search_leads_osm(keyword, location, limit=50):
-    """Busca negocios en OSM con traducción automática ES->EN y filtrado por distrito"""
+def search_leads_osm(keyword, location, limit=100):
+    """Busca negocios en OSM estandarizando el distrito para evitar errores de escritura"""
     
-    # Diccionario de traducción transparente para ti
     translations = {
         'centros educativos': 'school', 'colegio': 'school', 'escuela': 'school', 
         'universidad': 'university', 'instituto': 'college',
@@ -141,75 +140,81 @@ def search_leads_osm(keyword, location, limit=50):
         'dentista': 'dentist', 'veterinaria': 'veterinary'
     }
     
-    # Traducir automáticamente (si no está en lista, usa lo que escribiste)
     search_term = translations.get(keyword.lower().strip(), keyword)
     
-    # Buscar en toda Lima para no perder leads, luego filtramos por distrito
-    city_search = "Lima" if "lima" in location.lower() else location
+    # ESTANDARIZACIÓN DE SURCO: Si el usuario pone "Surco" o "Santiago de Surco", 
+    # lo unificamos para el filtro interno.
+    loc_clean = location.lower().strip()
+    is_surco = "surco" in loc_clean
     
-    url = f"https://nominatim.openstreetmap.org/search?q={search_term}+{city_search}&format=json&addressdetails=1&limit={limit}"
+    # Buscamos de forma amplia en Lima para asegurarnos de traer todos los nodos
+    url = f"https://openstreetmap.org{search_term}+Lima&format=json&addressdetails=1&limit={limit}"
     headers = {'User-Agent': 'OrasicSalesMachine/1.0'} 
     
     try:
         resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            new_leads = []
+        if resp.status_code != 200:
+            return []
             
-            existing_leads = get_leads("Pendiente") + get_leads("Enviado")
-            existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+        data = resp.json()
+        new_leads = []
+        
+        existing_leads = get_leads("Pendiente") + get_leads("Enviado")
+        existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+        
+        for place in data:
+            raw_name = place.get('display_name', '').split(',')[0].strip()
+            name = raw_name.split(' - ')[0].split('(')[0].strip() 
             
-            # Preparar palabras clave del distrito para filtrar
-            target_district = location.lower().replace(',', '').strip()
-            district_keywords = [kw for kw in target_district.split() if len(kw) > 2]
+            if name.lower() in existing_names or len(name) <= 3:
+                continue
             
-            for place in data:
-                raw_name = place.get('display_name', '').split(',')[0].strip()
-                name = raw_name.split(' - ')[0].split('(')[0].strip() 
-                
-                # Evitar duplicados y nombres basura
-                if name.lower() in existing_names or len(name) <= 3:
-                    continue
-                
-                address = place.get('address', {})
-                full_address = place.get('display_name', '').lower()
-                
-                # Filtrado inteligente: ¿La dirección contiene "Surco" o "Santiago"?
-                is_match = any(kw in full_address for kw in district_keywords)
-                
-                if not is_match:
-                    osm_district = (address.get('suburb') or address.get('city_district') or '')
-                    if any(kw in osm_district.lower() for kw in district_keywords):
-                        is_match = True
+            address = place.get('address', {})
+            
+            # Recolectamos todas las formas en las que OSM escribe el distrito
+            suburb = address.get('suburb', '').lower()
+            city_district = address.get('city_district', '').lower()
+            city = address.get('city', '').lower()
+            
+            # FILTRADO INTELIGENTE Y SEGURO:
+            # Si buscamos Surco, validamos contra los campos reales de OSM de forma exacta
+            valid_district = False
+            if is_surco:
+                if "surco" in suburb or "surco" in city_district:
+                    valid_district = True
+            else:
+                # Para otros distritos (ej. Miraflores, San Borja)
+                target_clean = loc_clean.replace("lima", "").replace(",", "").strip()
+                if target_clean in suburb or target_clean in city_district:
+                    valid_district = True
 
-                if is_match:
-                    district_name = (address.get('suburb') or address.get('city_district') or location).title()
-                    
-                    plan = "STARTER"
-                    k_lower = keyword.lower()
-                    if any(k in k_lower for k in ['clinica', 'hospital', 'gym', 'gimnasio', 'colegio', 'universidad', 'escuela']): 
-                        plan = "PRO"
-                    
-                    lead = {
-                        "nombre": name,
-                        "rubro": keyword.capitalize(),
-                        "distrito": district_name,
-                        "plan_sugerido": plan,
-                        "origen": "AUTO_OSM",
-                        "estado": "Pendiente",
-                        "email": "", 
-                        "telefono": "",
-                        "direccion_completa": place.get('display_name', ''),
-                        "created_at": datetime.now().isoformat()
-                    }
-                    new_leads.append(lead)
-                    existing_names.add(name.lower()) 
-            
-            return new_leads
-        return []
+            if valid_district:
+                district_name = "Santiago de Surco" if is_surco else (address.get('suburb') or address.get('city_district')).title()
+                
+                plan = "STARTER"
+                if any(k in keyword.lower() for k in ['clinica', 'hospital', 'gym', 'gimnasio', 'colegio', 'universidad', 'escuela']): 
+                    plan = "PRO"
+                
+                lead = {
+                    "nombre": name,
+                    "rubro": keyword.capitalize(),
+                    "distrito": district_name, # Guardamos el nombre limpio y único
+                    "plan_sugerido": plan,
+                    "origen": "AUTO_OSM",
+                    "estado": "Pendiente",
+                    "email": "", 
+                    "telefono": "",
+                    "direccion_completa": place.get('display_name', ''),
+                    "created_at": datetime.now().isoformat()
+                }
+                new_leads.append(lead)
+                existing_names.add(name.lower()) 
+        
+        return new_leads
     except Exception as e:
-        logger.error(f"Error OSM: {e}")
+        logger.error(f"Excepción en búsqueda OSM: {e}")
         return []
+
 
 @app.post("/api/auto-search")
 async def auto_search(request: Request):
