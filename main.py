@@ -245,8 +245,8 @@ async def auto_search(request: Request):
     
     time.sleep(1.1) # Respetar límites de OSM
     
-    new_leads = search_leads_osm(keyword, location, limit)
-    
+   new_leads = search_leads_google(keyword, location, limit)
+
     # Generar HTML de la tabla de vista previa
     rows_html = ""
     if new_leads:
