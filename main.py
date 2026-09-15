@@ -127,94 +127,114 @@ def get_sent_count():
 
 # --- MOTOR DE BÚSQUEDA AUTOMÁTICA CON TRADUCTOR Y FILTRO INTELIGENTE ---
 
-def search_leads_osm(keyword, location, limit=100):
-    """Busca negocios en OSM estandarizando el distrito para evitar errores de escritura"""
-    
-    translations = {
-        'centros educativos': 'school', 'colegio': 'school', 'escuela': 'school', 
-        'universidad': 'university', 'instituto': 'college',
-        'gimnasio': 'gym', 'gimnasios': 'gym', 'fitness': 'gym',
-        'barbería': 'hairdresser', 'barberias': 'hairdresser', 'peluquería': 'hairdresser',
-        'restaurante': 'restaurant', 'restaurantes': 'restaurant',
-        'clínica': 'clinic', 'clinicas': 'clinic', 'consultorio': 'doctors',
-        'dentista': 'dentist', 'veterinaria': 'veterinary'
-    }
-    
-    search_term = translations.get(keyword.lower().strip(), keyword)
-    
-    # ESTANDARIZACIÓN DE SURCO: Si el usuario pone "Surco" o "Santiago de Surco", 
-    # lo unificamos para el filtro interno.
+def search_leads_google(keyword, location, limit=100):
+    """Busca negocios con Google Places API (New), asigna Plan v4.1, Producto CUSTOM, límite de 100 y Pitches"""
+    GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not GOOGLE_KEY:
+        logger.warning("⚠️ GOOGLE_MAPS_API_KEY no configurada en Railway")
+        return []
+
     loc_clean = location.lower().strip()
     is_surco = "surco" in loc_clean
+    target_district_name = "Santiago de Surco" if is_surco else location.title()
+
+    url = "https://googleapis.com"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_KEY,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.primaryType"
+    }
     
-    # Buscamos de forma amplia en Lima para asegurarnos de traer todos los nodos
-    url = f"https://openstreetmap.org{search_term}+Lima&format=json&addressdetails=1&limit={limit}"
-    headers = {'User-Agent': 'OrasicSalesMachine/1.0'} 
-    
+    payload = {
+        "textQuery": f"{keyword} en {location}",
+        "maxResultCount": min(limit, 100),  # <--- Fijado en 100 como solicitaste
+        "languageCode": "es"
+    }
+
+    # 📋 DICCIONARIO DE PITCHES COMERCIALES AUTOMÁTICOS SEGÚN PLAN (v4.1)
+    PITCHES = {
+        "STARTER": "¡Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada para recibir clientes en {distrito}. Te ofrecemos presencia digital llave en mano con tu Landing Page responsive, galería y botón directo a WhatsApp por solo S/599 setup + S/99/mes. ¿Te interesa?",
+        "MANAGER": "¡Hola, {nombre}! Gestionar citas por chat manual consume tiempo valioso. Optimiza tu negocio en {distrito} con nuestro sistema de reservas con calendario visual en Supabase y recordatorios automáticos pre-cita por S/649 setup + S/149/mes. ¿Cuándo agendamos una demo?",
+        "PRO": "¡Hola, {nombre}! Lleva tus sedes al siguiente nivel. Automatiza tu atención con nuestro Chatbot IA para WhatsApp Business API activo 24/7 y panel de KPIs en tiempo real por S/699 setup + S/199/mes. ¿Te gustaría ver cómo reduce el no-show?",
+        "CUSTOM": "¡Hola, {nombre}! Para operaciones corporativas de gran escala, desarrollamos módulos 100% a medida con integraciones ERP/legacy avanzadas e infraestructura dedicada. Cotización a medida previa auditoría técnica. ¿Coordinamos una reunión de alcance?"
+    }
+
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.post(url, headers=headers, json=payload, timeout=12)
         if resp.status_code != 200:
+            logger.error(f"❌ Error Google Maps API: {resp.status_code}")
             return []
             
         data = resp.json()
+        places = data.get("places", [])
         new_leads = []
-        
+
         existing_leads = get_leads("Pendiente") + get_leads("Enviado")
         existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
-        
-        for place in data:
-            raw_name = place.get('display_name', '').split(',')[0].strip()
-            name = raw_name.split(' - ')[0].split('(')[0].strip() 
-            
-            if name.lower() in existing_names or len(name) <= 3:
-                continue
-            
-            address = place.get('address', {})
-            
-            # Recolectamos todas las formas en las que OSM escribe el distrito
-            suburb = address.get('suburb', '').lower()
-            city_district = address.get('city_district', '').lower()
-            city = address.get('city', '').lower()
-            
-            # FILTRADO INTELIGENTE Y SEGURO:
-            # Si buscamos Surco, validamos contra los campos reales de OSM de forma exacta
-            valid_district = False
-            if is_surco:
-                if "surco" in suburb or "surco" in city_district:
-                    valid_district = True
-            else:
-                # Para otros distritos (ej. Miraflores, San Borja)
-                target_clean = loc_clean.replace("lima", "").replace(",", "").strip()
-                if target_clean in suburb or target_clean in city_district:
-                    valid_district = True
 
-            if valid_district:
-                district_name = "Santiago de Surco" if is_surco else (address.get('suburb') or address.get('city_district')).title()
+        for place in places:
+            name = place.get("displayName", {}).get("text", "").strip()
+            if not name or name.lower() in existing_names:
+                continue
+
+            # FILTRADO GEOGRÁFICO ESTRICTO POR DISTRITO DE GOOGLE MAPS
+            components = place.get("addressComponents", [])
+            in_district = False
+            
+            for comp in components:
+                types = comp.get("types", [])
+                comp_name = comp.get("longName", "").lower()
+                if "sublocality_level_1" in types or "locality" in types:
+                    if is_surco and "surco" in comp_name:
+                        in_district = True
+                    elif not is_surco and loc_clean.replace("lima", "").strip() in comp_name:
+                        in_district = True
+
+            if in_district:
+                # 🧠 MOTOR AUTOMÁTICO DE ASIGNACIÓN ORASIC LAB (v4.1)
+                rubro_clean = keyword.lower()
+                nombre_clean = name.lower()
+
+                # Clasificación por defecto
+                plan_asignado = "STARTER" 
+
+                # 1. Negocios establecidos con flujo de citas -> MANAGER (Reservas)
+                if any(k in rubro_clean for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica"]):
+                    plan_asignado = "MANAGER"
                 
-                plan = "STARTER"
-                if any(k in keyword.lower() for k in ['clinica', 'hospital', 'gym', 'gimnasio', 'colegio', 'universidad', 'escuela']): 
-                    plan = "PRO"
+                # 2. Negocios complejos o volumen medio -> PRO (Operaciones + IA)
+                if any(k in rubro_clean for k in ["gym", "gimnasio", "clinica", "hospital", "universidad", "colegio", "agencia"]):
+                    plan_asignado = "PRO"
                 
+                # 3. Grandes cuentas, corporativos o redes masivas -> CUSTOM (A medida)
+                if any(x in nombre_clean for x in ["corporacion", "corporativo", "holding", "banco", "franquicia", "asociacion"]):
+                    plan_asignado = "CUSTOM"
+                if any(x in nombre_clean for x in ["spa", "sac", "cadena", "grupo", "red"]) and plan_asignado != "CUSTOM":
+                    plan_asignado = "PRO"
+
+                # Generar el mensaje de ventas personalizado usando el diccionario v4.1
+                pitch_personalizado = PITCHES[plan_asignado].format(nombre=name, distrito=target_district_name)
+
                 lead = {
                     "nombre": name,
                     "rubro": keyword.capitalize(),
-                    "distrito": district_name, # Guardamos el nombre limpio y único
-                    "plan_sugerido": plan,
-                    "origen": "AUTO_OSM",
+                    "distrito": target_district_name,
+                    "plan_sugerido": plan_asignado,  
+                    "origen": "GOOGLE_MAPS",
                     "estado": "Pendiente",
                     "email": "", 
                     "telefono": "",
-                    "direccion_completa": place.get('display_name', ''),
+                    "direccion_completa": place.get("formattedAddress", ""),
+                    "pitch_automatizado": pitch_personalizado,  # <--- Pitch v4.1 inyectado directamente
                     "created_at": datetime.now().isoformat()
                 }
                 new_leads.append(lead)
-                existing_names.add(name.lower()) 
-        
+                existing_names.add(name.lower())
+
         return new_leads
     except Exception as e:
-        logger.error(f"Excepción en búsqueda OSM: {e}")
+        logger.error(f"Excepción en búsqueda Google Maps: {e}")
         return []
-
 
 @app.post("/api/auto-search")
 async def auto_search(request: Request):
