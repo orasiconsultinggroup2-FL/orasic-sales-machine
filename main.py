@@ -53,7 +53,7 @@ def call_groq_api(prompt_text):
     }
     
     payload = {
-        "model": "llama-3.1-8b-versatile",
+        "model": "llama-3.3-70b-versatile",,
         "messages": [{"role": "user", "content": prompt_text}],
         "temperature": 0.7,
         "max_tokens": 250
@@ -62,7 +62,7 @@ def call_groq_api(prompt_text):
     try:
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
+            headers=headers,"model": "llama-3.3-70b-versatile",
             json=payload,
             timeout=15
         )
