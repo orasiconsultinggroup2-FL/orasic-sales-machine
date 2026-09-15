@@ -323,7 +323,7 @@ INSTRUCCIONES: Usa el gancho exacto. Tono STARTER=cercano, PRO=estratégico. Má
 Termina con: "¿Te parece si agendamos 15 min esta semana? Sin compromiso. Fernando Perez - ORASIC Lab"
 SOLO escribe el pitch."""
 
-        try:
+    try:
         # USAR GEMINI COMO PRINCIPAL (más estable)
         if GEMINI_API_KEY:
             resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
@@ -338,8 +338,8 @@ SOLO escribe el pitch."""
         logger.error(f"Error generando pitch: {e}")
     
     # Fallback final si todo falla
-    return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab"
-@app.get("/", response_class=HTMLResponse)
+    return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab
+"@app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads = get_leads("Pendiente")
     sent_count = get_sent_count()
