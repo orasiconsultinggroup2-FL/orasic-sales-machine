@@ -536,6 +536,6 @@ async def disparar(request: Request):
         <a href='/' style='margin-top:30px;color:#A78BFA;text-decoration:none;border:1px solid #A78BFA;padding:10px 20px;border-radius:8px;'>Volver al Dashboard</a>
     </div>""")
 
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+if __name__ == "__main__":
+     import uvicorn
+     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
