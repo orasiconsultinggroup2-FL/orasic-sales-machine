@@ -323,23 +323,22 @@ INSTRUCCIONES: Usa el gancho exacto. Tono STARTER=cercano, PRO=estratégico. Má
 Termina con: "¿Te parece si agendamos 15 min esta semana? Sin compromiso. Fernando Perez - ORASIC Lab"
 SOLO escribe el pitch."""
 
-    try:
-        # USAMOS LA NUEVA FUNCIÓN DIRECTA EN LUGAR DE groq_client
-        pitch = call_groq_api(prompt)
-        if pitch:
-            return pitch
-            
-        # Fallback a Gemini si Groq falla
+        try:
+        # USAR GEMINI COMO PRINCIPAL (más estable)
         if GEMINI_API_KEY:
             resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
             return resp.text.strip().replace('"', '')
+        
+        # Fallback a Groq solo si Gemini falla
+        pitch = call_groq_api(prompt)
+        if pitch:
+            return pitch
             
     except Exception as e:
         logger.error(f"Error generando pitch: {e}")
     
     # Fallback final si todo falla
     return f"{hook} En ORASIC Lab resolvemos esto sin burocracia. ¿15 min esta semana? Fernando Perez - ORASIC Lab"
-
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads = get_leads("Pendiente")
