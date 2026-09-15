@@ -53,7 +53,7 @@ def call_groq_api(prompt_text):
     }
     
     payload = {
-        "model": "llama-3.3-70b-versatile",,
+        "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt_text}],
         "temperature": 0.7,
         "max_tokens": 250
