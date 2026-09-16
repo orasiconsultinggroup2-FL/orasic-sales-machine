@@ -128,7 +128,7 @@ def search_leads_google(keyword, location, limit=100):
             plan_assigned = "STARTER"
             criterio_match = "Clasificación base."
 
-            try:
+          try:
                 respuesta_ia = None
                 if GEMINI_API_KEY:
                     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -142,7 +142,9 @@ def search_leads_google(keyword, location, limit=100):
                     data_json = json.loads(respuesta_ia)
                     plan_assigned = data_json.get("plan", "STARTER").upper().strip()
                     criterio_match = data_json.get("criterio", "Mapeado por IA.")
-            except:
+            except Exception as e:
+                logger.error(f"Error clasificando con IA: {e}")
+                # Fallback manual si la IA falla
                 if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante", "chifa"]):
                     plan_assigned = "MANAGER"
 
