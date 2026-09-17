@@ -1,3 +1,4 @@
+$code = @"
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 import os, logging, requests, json, csv, io, smtplib, urllib.parse
@@ -106,14 +107,12 @@ def search_internal_db(query_text):
         return []
 
 def send_email_pitch(to_email, business_name, pitch_text):
-    if not SMTP_PASSWORD:
-        logger.warning("SMTP_APP_PASSWORD no configurada")
-        return False
+    if not SMTP_PASSWORD: return False
     try:
         msg = MIMEMultipart()
         msg["From"] = SMTP_EMAIL
         msg["To"] = to_email
-        msg["Subject"] = f"Propuesta de Optimizacion Digital para {business_name}"
+        msg["Subject"] = f"Propuesta para {business_name}"
         msg.attach(MIMEText(pitch_text, "plain"))
         server = smtplib.SMTP("://gmail.com", 587)
         server.starttls()
@@ -121,8 +120,7 @@ def send_email_pitch(to_email, business_name, pitch_text):
         server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
         server.quit()
         return True
-    except Exception as e:
-        logger.error(f"Error SMTP: {e}")
+    except:
         return False
 
 def search_leads_google(keyword, location, limit=100):
@@ -131,12 +129,6 @@ def search_leads_google(keyword, location, limit=100):
     url = "https://googleapis.com"
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"}
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
-    PITCHES = {
-        "STARTER": "Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada.",
-        "MANAGER": "Hola, {nombre}! Optimiza tu negocio con nuestro sistema de reservas.",
-        "PRO": "Hola, {nombre}! Automatiza tu atencion con nuestro Chatbot IA.",
-        "CUSTOM": "Hola, {nombre}! Desarrollamos modulos 100% a medida."
-    }
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=12)
         if resp.status_code != 200: return []
@@ -147,13 +139,10 @@ def search_leads_google(keyword, location, limit=100):
         for place in places:
             name = place.get("displayName", {}).get("text", "").strip()
             if not name or name.lower() in existing_names: continue
-            rubro_clean = keyword.capitalize()
-            tipo_google = place.get('primaryType', 'Desconocido')
             tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
-            pitch_personalizado = PITCHES.get("STARTER", PITCHES["STARTER"]).format(nombre=name)
             lead = {
                 "nombre": name, 
-                "rubro": rubro_clean, 
+                "rubro": keyword.capitalize(), 
                 "distrito": location.title(), 
                 "plan_sugerido": "STARTER",  
                 "criterio_match": "Clasificacion base.", 
@@ -162,8 +151,8 @@ def search_leads_google(keyword, location, limit=100):
                 "email": "",
                 "telefono": tel,
                 "direccion_completa": place.get("formattedAddress", ""), 
-                "pitch_automatizado": pitch_personalizado,
-                "datos_originales": {"Categoria": rubro_clean, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
+                "pitch_automatizado": f"Hola, {name}! Ofrecemos soluciones digitales.",
+                "datos_originales": {"Categoria": keyword, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
                 "created_at": datetime.now().isoformat()
             }
             new_leads.append(lead)
@@ -181,25 +170,11 @@ async def dashboard():
         email_dest = lead.get("email", "").strip()
         tel_dest = lead.get("telefono", "").strip()
         texto_msg = urllib.parse.quote(lead.get("pitch_automatizado", ""))
-        
         if email_dest:
             btn_accion = f"<form action='/api/send-email/{lead.get(\"id\")}' method='POST' style='margin:0;'><button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; font-weight:bold; cursor:pointer;'>Despachar Email</button></form>"
         elif tel_dest:
             btn_accion = f"<a href='https://whatsapp.com{tel_dest}&text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead.get(\"id\")}\", {{method: \"POST\"}}); setTimeout(function(){{location.reload();}}, 1000);' style='background:#22C55E; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:0.8rem; font-weight:bold; display:inline-block;'>Enviar WA</a>"
         else:
             btn_accion = "<span style='color:#64748B;'>Sin Contacto</span>"
-            
-        rows_html += f"""
-        <tr style="border-bottom: 1px solid #1E293B;">
-            <td style="padding:12px; text-align:center; color:#64748B;">#{i}</td>
-            <td style="padding:12px; font-weight:600; color:white;">{lead.get("nombre")}</td>
-            <td style="padding:12px; color:#94A3B8;">{lead.get("rubro")}</td>
-            <td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td>
-            <td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600; border:1px solid #22D3EE30;">{lead.get("plan_sugerido")}</span></td>
-            <td style="padding:12px; text-align:center;">{btn_accion}</td>
-        </tr>
-        """
-    if not leads_pendientes:
-        rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes por enviar mensaje.</td></tr>"
-    return f"""
-
+        rows_html += f"""<tr style="border-bottom: 1px solid #1E293B;"><td style="padding:12px; text-align:center; color:#64748B;">#{i}</td><td style="padding:12px; font-weight:600; color:white;">{lead.get("nombre")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("rubro")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td><td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">{lead.get("plan_sugerido")}</span></td><td style="padding:12px; text-align:center;">{btn_accion}</td></tr>"""
+    if not rows_html: rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
