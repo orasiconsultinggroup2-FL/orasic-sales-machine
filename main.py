@@ -1,4 +1,3 @@
-$code = @"
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 import os, logging, requests, json, csv, io, smtplib, urllib.parse
@@ -127,7 +126,11 @@ def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
     url = "https://googleapis.com"
-    headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"}
+    headers = {
+        "Content-Type": "application/json", 
+        "X-Goog-Api-Key": GOOGLE_KEY, 
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"
+    }
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=12)
@@ -178,3 +181,22 @@ async def dashboard():
             btn_accion = "<span style='color:#64748B;'>Sin Contacto</span>"
         rows_html += f"""<tr style="border-bottom: 1px solid #1E293B;"><td style="padding:12px; text-align:center; color:#64748B;">#{i}</td><td style="padding:12px; font-weight:600; color:white;">{lead.get("nombre")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("rubro")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td><td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">{lead.get("plan_sugerido")}</span></td><td style="padding:12px; text-align:center;">{btn_accion}</td></tr>"""
     if not rows_html: rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
+    
+    html_content = f"""
+    <html>
+    <head><title>Dashboard Leads</title></head>
+    <body style="background:#0F172A; color:white; font-family:sans-serif; padding:40px;">
+        <h2>Prospectos Enviados: {leads_enviados}</h2>
+        <table style="width:100%; border-collapse:collapse; background:#1E293B; border-radius:8px; overflow:hidden;">
+            <tr style="background:#334155; color:#CBD5E1;">
+                <th style="padding:12px;">#</th><th style="padding:12px; text-align:left;">Nombre</th><th style="padding:12px; text-align:left;">Rubro</th><th style="padding:12px; text-align:left;">Distrito</th><th style="padding:12px;">Plan</th><th style="padding:12px;">Acción</th>
+            </tr>
+            {rows_html}
+        </table>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
