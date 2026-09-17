@@ -171,9 +171,7 @@ async def dashboard():
             <h1 style='color:#A78BFA; margin-top:0;'>🚀 Sistema de Extracción e Importación de Leads</h1>
             <p style='color:#94A3B8;'>Estado de Supabase: {"🟢 Conectado" if supabase_connected else "🔴 Desconectado"}</p>
             <p style='color:#94A3B8;'>Leads procesados y enviados en total: <strong>{leads_enviados}</strong></p>
-            
             <hr style='border-color:#1E293B; margin:30px 0;'>
-            
             <h3>🔍 1. Búsqueda Automática (Google Maps + IA)</h3>
             <form action='/api/auto-search' method='POST' style='display:grid; gap:15px;'>
                 <label>Palabra clave (Rubro): <input type='text' name='keyword' value='barberia' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
@@ -181,9 +179,7 @@ async def dashboard():
                 <label>Límite de resultados: <input type='number' name='limit' value='10' max='100' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
                 <button type='submit' style='background:#7C3AED; color:white; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;'>Buscar e Importar a Supabase</button>
             </form>
-            
             <hr style='border-color:#1E293B; margin:30px 0;'>
-            
             <h3>📋 2. Importación Manual por Bloque CSV</h3>
             <p style='font-size:0.85rem; color:#94A3B8;'>Formato de columnas requerido: <code>Negocio,Categoria,Distrito,Direccion</code></p>
             <form action='/api/import-personal-csv' method='POST' style='display:grid; gap:15px;'>
