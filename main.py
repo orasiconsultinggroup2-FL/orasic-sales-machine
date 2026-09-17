@@ -33,6 +33,35 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
+# --- LISTAS PREDEFINIDAS PARA DROPDOWNS ---
+
+RUBROS_NEGOCIOS = [
+    "Abogados", "Academias", "Agencias de Viajes", "Almacenes", "Arquitectos", 
+    "Asesorías", "Automotriz", "Bancos", "Barberías", "Bares", "Bibliotecas", 
+    "Bodegas", "Boutiques", "Cafeterías", "Calzados", "Canchas Deportivas", 
+    "Carnicerías", "Centros Comerciales", "Cerámicas", "Clínicas", "Colegios", 
+    "Consultoras", "Constructoras", "Contadores", "Dentistas", "Discotecas", 
+    "Estéticas", "Farmacias", "Ferreterías", "Fitness", "Florerías", 
+    "Gimnasios", "Hoteles", "Imprentas", "Jardinería", "Joyeros", "Laboratorios", 
+    "Lavanderías", "Librerías", "Mascotas", "Mecánicos", "Medicinas", 
+    "Mueblerías", "Ópticas", "Panaderías", "Peluquerías", "Pet Shops", 
+    "Polideportivos", "Restaurantes", "Salones de Eventos", "Supermercados", 
+    "Talleres", "Tiendas de Ropa", "Veterinarias", "Zapaterías", "Otro"
+]
+
+DISTRITOS_LIMA = [
+    "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", 
+    "Chorrillos", "Cieneguilla", "Comas", "El Agustino", "Independencia", 
+    "Jesús María", "La Molina", "La Victoria", "Lima", "Lince", 
+    "Los Olivos", "Lurigancho", "Lurín", "Magdalena del Mar", "Miraflores", 
+    "Pachacámac", "Pucusana", "Pueblo Libre", "Puente Piedra", "Punta Hermosa", 
+    "Punta Negra", "Rímac", "San Bartolo", "San Borja", "San Isidro", 
+    "San Juan de Lurigancho", "San Juan de Miraflores", "San Luis", 
+    "San Martín de Porres", "San Miguel", "Santa Anita", "Santa María del Mar", 
+    "Santa Rosa", "Santiago de Surco", "Surquillo", "Villa El Salvador", 
+    "Villa María del Triunfo", "Otro"
+]
+
 # --- FUNCIONES AUXILIARES ---
 
 def call_groq_api(prompt_text):
@@ -90,7 +119,7 @@ def update_lead_status(lead_id, new_status="Enviado"):
 
 def send_email_pitch(to_email, business_name, pitch_text):
     if not SMTP_PASSWORD: 
-        logger.warning("️ SMTP Password no configurada")
+        logger.warning("⚠️ SMTP Password no configurada")
         return False
     try:
         msg = MIMEMultipart()
@@ -171,6 +200,12 @@ async def auto_search(request: Request):
     location = form.get("location", "")
     limit = min(int(form.get("limit", 10)), 100)
     
+    # Si selecciona "Otro", usa el texto libre, sino usa el seleccionado
+    if keyword == "Otro":
+        keyword = form.get("keyword_other", "").strip()
+    if location == "Otro":
+        location = form.get("location_other", "").strip()
+
     if not keyword or not location:
         return JSONResponse({"error": "Debes ingresar un rubro y un distrito"}, status_code=400)
 
@@ -263,38 +298,20 @@ async def export_csv():
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # ENCABEZADOS EXACTOS QUE PEDISTE
     writer.writerow([
-        "Categoria",          # 1
-        "Distrito",           # 2
-        "Negocio",            # 3
-        "Direccion",          # 4
-        "Rating",             # 5
-        "Reseñas",            # 6
-        "Contacto",           # 7
-        "Web/Redes",          # 8
-        "Publico objetivo",   # 9
-        "Puntos fuertes",     # 10
-        "Puntos debiles",     # 11
-        "Presencia digital",  # 12
-        "Responde reseñas"    # 13
+        "Categoria", "Distrito", "Negocio", "Direccion", "Rating", "Reseñas", 
+        "Contacto", "Web/Redes", "Publico objetivo", "Puntos fuertes", 
+        "Puntos debiles", "Presencia digital", "Responde reseñas"
     ])
     
     for lead in leads:
         writer.writerow([
-            lead.get("rubro", ""),                # Categoria
-            lead.get("distrito", ""),             # Distrito
-            lead.get("nombre", ""),               # Negocio
-            lead.get("direccion_completa", ""),   # Direccion
-            "",                                   # Rating
-            "",                                   # Reseñas
-            lead.get("telefono", ""),             # Contacto
-            "",                                   # Web/Redes
-            lead.get("plan_sugerido", ""),        # Publico objetivo
-            "",                                   # Puntos fuertes
-            lead.get("criterio_match", ""),       # Puntos debiles
-            "No",                                 # Presencia digital
-            ""                                    # Responde reseñas
+            lead.get("rubro", ""),
+            lead.get("distrito", ""),
+            lead.get("nombre", ""),
+            lead.get("direccion_completa", ""),
+            "", "", lead.get("telefono", ""), "", lead.get("plan_sugerido", ""),
+            "", lead.get("criterio_match", ""), "No", ""
         ])
         
     output.seek(0)
@@ -305,7 +322,7 @@ async def export_csv():
         headers={"Content-Disposition": "attachment; filename=leads_orasic_avanzado.csv"}
     )
 
-# --- DASHBOARD VISUAL ---
+# --- DASHBOARD VISUAL CON DROPDOWNS ---
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
@@ -347,6 +364,10 @@ async def dashboard():
     
     if not rows_html: rows_html = "<tr><td colspan='7' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
     
+    # Generar opciones de dropdowns
+    rubro_options = "".join([f'<option value="{r}">{r}</option>' for r in RUBROS_NEGOCIOS])
+    distrito_options = "".join([f'<option value="{d}">{d}</option>' for d in DISTRITOS_LIMA])
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -360,20 +381,57 @@ async def dashboard():
             th {{ background:#334155; color:#CBD5E1; padding:12px; text-align:left; }}
             tr:hover {{ background:#334155; }}
             .btn-export {{ background:#F59E0B; color:white; padding:10px 20px; text-decoration:none; border-radius:6px; font-weight:bold; display:inline-block; margin-bottom:20px; }}
-            .search-box {{ background:#1E293B; padding:20px; border-radius:8px; margin-bottom:30px; display:flex; gap:10px; flex-wrap:wrap; }}
-            input {{ padding:10px; border-radius:4px; border:1px solid #475569; background:#0F172A; color:white; flex:1; }}
+            .search-box {{ background:#1E293B; padding:20px; border-radius:8px; margin-bottom:30px; display:flex; gap:10px; flex-wrap:wrap; align-items:end; }}
+            select, input {{ padding:10px; border-radius:4px; border:1px solid #475569; background:#0F172A; color:white; flex:1; min-width:150px; }}
             button.search-btn {{ background:#A78BFA; color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer; font-weight:bold; }}
+            .other-input {{ display:none; margin-top:5px; }}
         </style>
+        <script>
+            function toggleOther(selectId, inputId) {{
+                var select = document.getElementById(selectId);
+                var input = document.getElementById(inputId);
+                if (select.value === "Otro") {{
+                    input.style.display = "block";
+                    input.required = true;
+                }} else {{
+                    input.style.display = "none";
+                    input.required = false;
+                }}
+            }}
+        </script>
     </head>
     <body>
         <div style="max-width:1000px; margin:0 auto;">
             <h1 style="text-align:center; margin-bottom:40px;"> ORASIC Sales Machine</h1>
             
             <div class="search-box">
-                <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex:1;">
-                    <input type="text" name="keyword" placeholder="Rubro (ej. Barbería, Clínica, Gym)" required>
-                    <input type="text" name="location" placeholder="Distrito (ej. Miraflores, Surco)" required>
-                    <input type="number" name="limit" value="20" min="1" max="100" style="width:80px;">
+                <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex:1; flex-wrap:wrap;">
+                    
+                    <!-- Dropdown Rubro -->
+                    <div style="flex:1; min-width:200px;">
+                        <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Rubro / Categoría</label>
+                        <select name="keyword" id="keyword_select" onchange="toggleOther('keyword_select', 'keyword_other')" required>
+                            <option value="" disabled selected>Selecciona un rubro</option>
+                            {rubro_options}
+                        </select>
+                        <input type="text" id="keyword_other" name="keyword_other" placeholder="Escribe otro rubro..." class="other-input">
+                    </div>
+
+                    <!-- Dropdown Distrito -->
+                    <div style="flex:1; min-width:200px;">
+                        <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Distrito / Ubicación</label>
+                        <select name="location" id="location_select" onchange="toggleOther('location_select', 'location_other')" required>
+                            <option value="" disabled selected>Selecciona un distrito</option>
+                            {distrito_options}
+                        </select>
+                        <input type="text" id="location_other" name="location_other" placeholder="Escribe otro distrito..." class="other-input">
+                    </div>
+
+                    <div style="width:100px;">
+                        <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Cantidad</label>
+                        <input type="number" name="limit" value="20" min="1" max="100">
+                    </div>
+
                     <button type="submit" class="search-btn">🔍 Buscar</button>
                 </form>
             </div>
@@ -381,19 +439,13 @@ async def dashboard():
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
                 <div><strong>Enviados:</strong> <span style="color:#22C55E; font-size:1.5rem;">{leads_enviados}</span></div>
                 <div><strong>Pendientes:</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(leads_pendientes)}</span></div>
-                <a href="/api/export-csv" class="btn-export">📥 Exportar CSV</a>
+                <a href="/api/export-csv" class="btn-export"> Exportar CSV</a>
             </div>
             
             <table>
                 <thead>
                     <tr>
-                        <th>#</th>
-                        <th>Nombre</th>
-                        <th>Negocio / Rubro</th>
-                        <th>Distrito</th>
-                        <th>WhatsApp</th>
-                        <th>Plan Sugerido</th>
-                        <th>Acción</th>
+                        <th>#</th><th>Nombre</th><th>Negocio / Rubro</th><th>Distrito</th><th>WhatsApp</th><th>Plan Sugerido</th><th>Acción</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -402,7 +454,7 @@ async def dashboard():
             </table>
             
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B; font-size:0.9rem;">v3.0 • Búsqueda Universal • Exportación CSV Avanzada</p>
+                <p style="color:#64748B; font-size:0.9rem;">v4.0 • Dropdowns Inteligentes • Exportación Avanzada</p>
             </div>
         </div>
     </body>
