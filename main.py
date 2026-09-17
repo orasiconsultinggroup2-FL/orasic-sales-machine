@@ -50,7 +50,7 @@ def call_groq_api(prompt_text):
         "temperature": 0.7, "max_tokens": 250
     }
     try:
-        response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: 
@@ -91,13 +91,13 @@ def insert_lead_supabase(lead):
     except: 
         return False
 
-# --- MOTOR DE BÚSQUEDA AUTOMÁTICAAbierto MEDIANTE IA ---
+# --- MOTOR DE BÚSQUEDA AUTOMÁTICA MEDIANTE IA ---
 
 def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
     
-    url = "https://googleapis.com"
+    url = "https://places.googleapis.com/v1/places:searchText"
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType"}
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
 
@@ -121,7 +121,8 @@ def search_leads_google(keyword, location, limit=100):
             name = place.get("displayName", {}).get("text", "").strip()
             if not name or name.lower() in existing_names: continue
 
-                                    rubro_clean = keyword.capitalize()
+            # CORRECCIÓN DE SANGRÍA AQUÍ (Alineado con el 'for')
+            rubro_clean = keyword.capitalize()
             tipo_google = place.get('primaryType', 'Desconocido')
             
             prompt_clasificacion = f'Clasifica la empresa "{name}" (Rubro: {rubro_clean}, GoogleType: {tipo_google}) en STARTER, MANAGER, PRO o CUSTOM. Responde solo JSON sin markdown: {{"plan": "VALOR", "criterio": "RAZON"}}'
@@ -145,14 +146,21 @@ def search_leads_google(keyword, location, limit=100):
             except Exception as e:
                 logger.error(f"Error clasificando con IA: {e}")
                 # Fallback manual si la IA falla
-                if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante","chifa"]):
+                if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante", "chifa"]):
                     plan_assigned = "MANAGER"
             
             pitch_personalizado = PITCHES.get(plan_assigned, PITCHES["STARTER"]).format(nombre=name)
+            
             lead = {
-                "nombre": name, "rubro": rubro_clean, "distrito": location.title(), "plan_sugerido": plan_assigned,  
-                "criterio_match": criterion_match, "origen": "GOOGLE_MAPS", "estado": "Pendiente",
-                "direccion_completa": place.get("formattedAddress", ""), "pitch_automatizado": pitch_personalizado,
+                "nombre": name, 
+                "rubro": rubro_clean, 
+                "distrito": location.title(), 
+                "plan_sugerido": plan_assigned,  
+                "criterio_match": criterio_match, # CORREGIDO: era criterion_match
+                "origen": "GOOGLE_MAPS", 
+                "estado": "Pendiente",
+                "direccion_completa": place.get("formattedAddress", ""), 
+                "pitch_automatizado": pitch_personalizado,
                 "datos_originales": {"Categoria": rubro_clean, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
                 "created_at": datetime.now().isoformat()
             }
@@ -196,3 +204,10 @@ async def import_personal_csv(request: Request):
             direccion = row.get("Direccion", "").strip()
             
             plan_assigned = "STARTER"
+            # Aquí iría el resto de tu lógica de importación CSV si la tenías
+            
+    except Exception as e:
+        logger.error(f"Error importando CSV: {e}")
+        return HTMLResponse("Error procesando CSV.")
+    
+    return HTMLResponse("Importación completada.")
