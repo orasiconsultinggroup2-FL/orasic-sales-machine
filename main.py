@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 import os, logging, requests, json, csv, io, smtplib, urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -46,11 +46,9 @@ def call_groq_api(prompt_text):
         "temperature": 0.7, "max_tokens": 250
     }
     try:
-        # CORRECCIÓN 1: URL CORRECTA DE GROQ
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            # CORRECCIÓN 2: AGREGADO [0] PARA ACCEDER A LA LISTA
-            return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
+            return response.json()["choices"]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: 
         return None
 
@@ -117,8 +115,7 @@ def send_email_pitch(to_email, business_name, pitch_text):
         msg["To"] = to_email
         msg["Subject"] = f"Propuesta para {business_name}"
         msg.attach(MIMEText(pitch_text, "plain"))
-        # CORRECCIÓN 3: URL SMTP CORRECTA
-        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server = smtplib.SMTP("://gmail.com", 587)
         server.starttls()
         server.login(SMTP_EMAIL, SMTP_PASSWORD)
         server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
@@ -130,7 +127,7 @@ def send_email_pitch(to_email, business_name, pitch_text):
 def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
-    url = "https://places.googleapis.com/v1/places:searchText" # URL CORRECTA PARA PLACES API
+    url = "https://googleapis.com"
     headers = {
         "Content-Type": "application/json", 
         "X-Goog-Api-Key": GOOGLE_KEY, 
@@ -179,35 +176,25 @@ async def dashboard():
         tel_dest = lead.get("telefono", "").strip()
         texto_msg = urllib.parse.quote(lead.get("pitch_automatizado", ""))
         lead_id = lead.get("id")
-        
-        # CORRECCIÓN 4: URL DE WHATSAPP CORRECTA (wa.me)
         if email_dest:
             btn_accion = f"<form action='/api/send-email/{lead_id}' method='POST' style='margin:0;'><button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; font-weight:bold; cursor:pointer;'>Despachar Email</button></form>"
         elif tel_dest:
-            btn_accion = f"<a href='https://wa.me/{tel_dest}?text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead_id}\", {{method: \"POST\"}}); setTimeout(function(){{location.reload();}}, 1000);' style='background:#22C55E; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:0.8rem; font-weight:bold; display:inline-block;'>Enviar WA</a>"
+            btn_accion = f"<a href='https://whatsapp.com{tel_dest}&text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead_id}\", {{method: \"POST\"}}); setTimeout(function(){{location.reload();}}, 1000);' style='background:#22C55E; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:0.8rem; font-weight:bold; display:inline-block;'>Enviar WA</a>"
         else:
             btn_accion = "<span style='color:#64748B;'>Sin Contacto</span>"
-            
         rows_html += f"""<tr style="border-bottom: 1px solid #1E293B;"><td style="padding:12px; text-align:center; color:#64748B;">#{i}</td><td style="padding:12px; font-weight:600; color:white;">{lead.get("nombre")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("rubro")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td><td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">{lead.get("plan_sugerido")}</span></td><td style="padding:12px; text-align:center;">{btn_accion}</td></tr>"""
-    
     if not rows_html: rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
     
     html_content = f"""
     <html>
-    <head><title>Dashboard Leads</title></head>
-    <body style="background:#0F172A; color:white; font-family:sans-serif; padding:40px;">
-        <h2>Prospectos Enviados: {leads_enviados}</h2>
-        <table style="width:100%; border-collapse:collapse; background:#1E293B; border-radius:8px; overflow:hidden;">
-            <tr style="background:#334155; color:#CBD5E1;">
-                <th style="padding:12px;">#</th><th style="padding:12px; text-align:left;">Nombre</th><th style="padding:12px; text-align:left;">Rubro</th><th style="padding:12px; text-align:left;">Distrito</th><th style="padding:12px;">Plan</th><th style="padding:12px;">Acción</th>
-            </tr>
-            {rows_html}
-        </table>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    <head>
+        <title>Dashboard Leads</title>
+        <meta charset="UTF-8">
+        <style>
+            body {{ background:#0F172A; color:white; font-family:sans-serif; padding:40px; margin:0; }}
+            .container {{ max-width: 1200px; margin: auto; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }}
+            .panel-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }}
+            .card {{ background: #1E293B; padding: 20px; border-radius: 8px; border: 1px solid #334155; }}
+            .card h3 {{ margin-top: 0; color: #38BDF8; }}
+            .form-group {{ display: flex; gap: 10px; margin-top: 15px; }}
