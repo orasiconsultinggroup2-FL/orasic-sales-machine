@@ -79,7 +79,7 @@ def insert_lead_supabase(lead):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=headers, json=lead, timeout=5)
-        if resp.status_code in:            
+        if resp.status_code >= 200 and resp.status_code < 300:            
             return True
         return False
     except: 
@@ -91,7 +91,9 @@ def update_lead_status(lead_id, new_status="Enviado"):
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
         url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
         resp = requests.patch(url, headers=headers, json={"estado": new_status}, timeout=5)
-        return resp.status_code in [200, 201, 204]
+        if resp.status_code >= 200 and resp.status_code < 300:
+            return True
+        return False
     except:
         return False
 
@@ -198,5 +200,3 @@ async def dashboard():
     """
     return HTMLResponse(content=html_content)
 
-@app.post("/api/send-email/{lead_id}")
-async def handle_send_email(lead_id: str):
