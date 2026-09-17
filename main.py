@@ -198,5 +198,5 @@ async def dashboard():
     """
     return HTMLResponse(content=html_content)
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+@app.post("/api/send-email/{lead_id}")
+async def handle_send_email(lead_id: str):
