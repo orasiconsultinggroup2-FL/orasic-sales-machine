@@ -28,13 +28,11 @@ if SUPABASE_URL and SUPABASE_KEY:
         
         if response.status_code == 200:
             supabase_connected = True
-            logger.info(f"✅ Conexión REST a Supabase exitosa: {SUPABASE_URL}")
+            logger.info("? Conexi�n REST a Supabase exitosa")
         else:
-            logger.error(f" Error REST Supabase: {response.status_code} - {response.text[:200]}")
+            logger.error(f" Error REST Supabase: {response.status_code}")
     except Exception as e:
-        logger.error(f"❌ Excepción conectando a Supabase: {e}")
-else:
-    logger.warning("⚠️ Faltan variables SUPABASE_URL o SUPABASE_KEY")
+        logger.error(f"? Excepci�n conectando a Supabase: {e}")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -90,38 +88,30 @@ def insert_lead_supabase(lead):
 def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
-    
     url = "https://googleapis.com"
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType"}
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
-
     PITCHES = {
-        "STARTER": "¡Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada para recibir clientes en su zona. Te ofrecemos presencia digital llave en mano por solo S/599 setup + S/99/mes.",
-        "MANAGER": "¡Hola, {nombre}! Optimiza tu negocio con nuestro sistema de reservas con calendario visual en Supabase por S/649 setup + S/149/mes.",
-        "PRO": "¡Hola, {nombre}! Automatiza tu atención con nuestro Chatbot IA para WhatsApp Business API activo 24/7 por S/699 setup + S/199/mes.",
-        "CUSTOM": "¡Hola, {nombre}! Desarrollamos módulos 100% a medida con integraciones ERP avanzadas. Cotización previa auditoría."
+        "STARTER": "�Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada.",
+        "MANAGER": "�Hola, {nombre}! Optimiza tu negocio con nuestro sistema de reservas.",
+        "PRO": "�Hola, {nombre}! Automatiza tu atenci�n con nuestro Chatbot IA.",
+        "CUSTOM": "�Hola, {nombre}! Desarrollamos m�dulos 100% a medida."
     }
-
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=12)
         if resp.status_code != 200: return []
         places = resp.json().get("places", [])
         new_leads = []
-        
         existing_leads = get_leads("Pendiente") + get_leads("Enviado")
         existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
-
         for place in places:
             name = place.get("displayName", {}).get("text", "").strip()
             if not name or name.lower() in existing_names: continue
-
             rubro_clean = keyword.capitalize()
             tipo_google = place.get('primaryType', 'Desconocido')
-            
-            prompt_clasificacion = f'Clasifica la empresa "{name}" (Rubro: {rubro_clean}, GoogleType: {tipo_google}) en STARTER, MANAGER, PRO o CUSTOM. Responde solo JSON sin markdown: {{"plan": "VALOR", "criterio": "RAZON"}}'
+            prompt_clasificacion = f'Clasifica la empresa "{name}" en STARTER, MANAGER, PRO o CUSTOM. Responde solo JSON: {{"plan": "VALOR", "criterio": "RAZON"}}'
             plan_assigned = "STARTER"
-            criterio_match = "Clasificación base."
-            
+            criterio_match = "Clasificaci�n base."
             try:
                 respuesta_ia = None
                 if GEMINI_API_KEY:
@@ -130,19 +120,14 @@ def search_leads_google(keyword, location, limit=100):
                     respuesta_ia = res.text.strip()
                 elif GROQ_API_KEY:
                     respuesta_ia = call_groq_api(prompt_clasificacion)
-
                 if respuesta_ia:
-                    respuesta_ia = respuesta_ia.replace("```json", "").replace("```", "").strip()
+                    respuesta_ia = respuesta_ia.replace("`json", "").replace("`", "").strip()
                     data_json = json.loads(respuesta_ia)
                     plan_assigned = data_json.get("plan", "STARTER").upper().strip()
                     criterio_match = data_json.get("criterio", "Mapeado por IA.")
             except Exception as e:
                 logger.error(f"Error clasificando con IA: {e}")
-                if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante", "chifa"]):
-                    plan_assigned = "MANAGER"
-            
             pitch_personalizado = PITCHES.get(plan_assigned, PITCHES["STARTER"]).format(nombre=name)
-            
             lead = {
                 "nombre": name, 
                 "rubro": rubro_clean, 
@@ -165,21 +150,24 @@ def search_leads_google(keyword, location, limit=100):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads_enviados = get_sent_count()
-    return f"""
-    <div style='background:#080A0F; color:white; padding:40px; font-family:sans-serif; min-height:100vh;'>
-        <div style='max-width:800px; margin:0 auto; background:#111827; padding:30px; border-radius:12px; border:1px solid #1E293B;'>
-            <h1 style='color:#A78BFA; margin-top:0;'>🚀 Sistema de Extracción e Importación de Leads</h1>
-            <p style='color:#94A3B8;'>Estado de Supabase: {"🟢 Conectado" if supabase_connected else "🔴 Desconectado"}</p>
-            <p style='color:#94A3B8;'>Leads procesados y enviados en total: <strong>{leads_enviados}</strong></p>
-            <hr style='border-color:#1E293B; margin:30px 0;'>
-            <h3>🔍 1. Búsqueda Automática (Google Maps + IA)</h3>
-            <form action='/api/auto-search' method='POST' style='display:grid; gap:15px;'>
-                <label>Palabra clave (Rubro): <input type='text' name='keyword' value='barberia' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
-                <label>Ubicación (Distrito/Ciudad): <input type='text' name='location' value='Lima' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
-                <label>Límite de resultados: <input type='number' name='limit' value='10' max='100' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
-                <button type='submit' style='background:#7C3AED; color:white; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;'>Buscar e Importar a Supabase</button>
-            </form>
-            <hr style='border-color:#1E293B; margin:30px 0;'>
-            <h3>📋 2. Importación Manual por Bloque CSV</h3>
-            <p style='font-size:0.85rem; color:#94A3B8;'>Formato de columnas requerido: <code>Negocio,Categoria,Distrito,Direccion</code></p>
-            <form action='/api/import-personal-csv' method='POST' style='display:grid; gap:15px;'>
+    return f"<html><body style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;'><h2>?? Sistema Activo</h2><p>Leads enviados: {leads_enviados}</p><form action='/api/auto-search' method='POST'><input type='text' name='keyword' value='barberia'><input type='text' name='location' value='Lima'><button type='submit'>Buscar</button></form></body></html>"
+
+@app.api_route("/api/auto-search", methods=["GET", "POST"])
+async def auto_search(request: Request):
+    if request.method == "POST":
+        form = await request.form()
+        keyword = form.get("keyword", "barberia")
+        location = form.get("location", "Lima")
+        limit = 10
+    else:
+        keyword = request.query_params.get("keyword", "barberia")
+        location = request.query_params.get("location", "Lima")
+        limit = 10
+    new_leads = search_leads_google(keyword, location, limit)
+    for lead in new_leads:
+        insert_lead_supabase(lead)
+    return {"status": "success", "encontrados": len(new_leads)}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
