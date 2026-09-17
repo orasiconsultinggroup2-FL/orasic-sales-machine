@@ -50,7 +50,7 @@ def call_groq_api(prompt_text):
         "temperature": 0.7, "max_tokens": 250
     }
     try:
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: 
@@ -69,7 +69,9 @@ def get_leads(status="Pendiente"):
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
     except: 
+        
         return []
+
 
 def get_sent_count():
     if not supabase_connected: return 0
@@ -85,7 +87,8 @@ def insert_lead_supabase(lead):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=headers, json=lead, timeout=5)
-        if resp.status_code == 200 or resp.status_code == 201 or resp.status_code == 204:
+        if resp.status_code in:  [ 200 , 201 , 204 ]
+          
             return True
         return False
     except: 
@@ -97,7 +100,7 @@ def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
     
-    url = "https://places.googleapis.com/v1/places:searchText"
+    url = "https://googleapis.com"
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType"}
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
 
@@ -121,7 +124,6 @@ def search_leads_google(keyword, location, limit=100):
             name = place.get("displayName", {}).get("text", "").strip()
             if not name or name.lower() in existing_names: continue
 
-            # CORRECCIÓN DE SANGRÍA AQUÍ (Alineado con el 'for')
             rubro_clean = keyword.capitalize()
             tipo_google = place.get('primaryType', 'Desconocido')
             
@@ -145,7 +147,6 @@ def search_leads_google(keyword, location, limit=100):
                     criterio_match = data_json.get("criterio", "Mapeado por IA.")
             except Exception as e:
                 logger.error(f"Error clasificando con IA: {e}")
-                # Fallback manual si la IA falla
                 if any(k in rubro_clean.lower() for k in ["barber", "peluquer", "salon", "dentista", "cancha", "estetica", "restaurante", "chifa"]):
                     plan_assigned = "MANAGER"
             
@@ -156,7 +157,7 @@ def search_leads_google(keyword, location, limit=100):
                 "rubro": rubro_clean, 
                 "distrito": location.title(), 
                 "plan_sugerido": plan_assigned,  
-                "criterio_match": criterio_match, # CORREGIDO: era criterion_match
+                "criterio_match": criterio_match, 
                 "origen": "GOOGLE_MAPS", 
                 "estado": "Pendiente",
                 "direccion_completa": place.get("formattedAddress", ""), 
@@ -170,44 +171,45 @@ def search_leads_google(keyword, location, limit=100):
     except: 
         return []
 
-@app.post("/api/auto-search")
+# --- ENDPOINTS REESTRUCTURADOS Y CORREGIDOS ---
+
+@app.api_route("/api/auto-search", methods=["GET", "POST"])
 async def auto_search(request: Request):
-    form = await request.form()
-    keyword = form.get("keyword", "barberia")
-    location = form.get("location", "Lima")
-    limit = min(int(form.get("limit", 10)), 100)
+    if request.method == "POST":
+        form = await request.form()
+        keyword = form.get("keyword", "barberia")
+        location = form.get("location", "Lima")
+        limit = min(int(form.get("limit", 10)), 100)
+    else:  # Si entras directo desde el navegador (GET)
+        keyword = request.query_params.get("keyword", "barberia")
+        location = request.query_params.get("location", "Lima")
+        limit = min(int(request.query_params.get("limit", 10)), 100)
     
+    # Ejecuta la búsqueda programada
     new_leads = search_leads_google(keyword, location, limit)
+    
+    # Genera la vista visual en HTML de los resultados
     rows_html = ""
     for i, lead in enumerate(new_leads, 1):
         insert_lead_supabase(lead)
-        rows_html += f'<tr style="border-bottom: 1px solid #1E293B;"><td style="padding:12px; text-align:center;">#{i}</td><td style="padding:12px; font-weight:bold; color:white;">{lead["nombre"]}</td><td style="padding:12px;">{lead["rubro"]}</td><td style="padding:12px;">{lead["distrito"]}</td><td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px;">{lead["plan_sugerido"]}</span></td><td style="padding:12px; color:#94A3B8; font-size:0.8rem;"><em>{lead["criterio_match"]}</em></td></tr>'
+        rows_html += f"""
+        <tr style="border-bottom: 1px solid #1E293B;">
+            <td style="padding:12px; text-align:center;">#{i}</td>
+            <td style="padding:12px; font-weight:bold; color:white;">{lead["nombre"]}</td>
+            <td style="padding:12px;">{lead["rubro"]}</td>
+            <td style="padding:12px;">{lead["distrito"]}</td>
+            <td style="padding:12px; text-align:center;">
+                <span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px;">{lead["plan_sugerido"]}</span>
+            </td>
+            <td style="padding:12px; color:#94A3B8; font-size:0.8rem;"><em>{lead["criterio_match"]}</em></td>
+        </tr>
+        """
     
-    if not new_leads: rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#94A3B8;'>No se encontraron nuevos registros.</td></tr>"
-    return HTMLResponse(f"<div style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;min-height:100vh;'><div style='max-width:1100px; margin:0 auto;'><h2>🔍 Resultados Importados</h2><table style='width:100%; border-collapse:collapse;'><tr style='background:#1E293B; color:#94A3B8;'><th>#</th><th>Nombre</th><th>Rubro</th><th>Ubicación</th><th>Plan</th><th>Criterio Match</th></tr>{rows_html}</table><br><a href='/' style='color:#A78BFA;text-decoration:none;'>Volver al Dashboard</a></div></div>")
-
-@app.post("/api/import-personal-csv")
-async def import_personal_csv(request: Request):
-    form = await request.form()
-    raw_csv = form.get("personal_csv_data", "").strip()
-    if not raw_csv: return HTMLResponse("Caja vacía.")
-    
-    try:
-        f = io.StringIO(raw_csv)
-        reader = csv.DictReader(f)
-        imported_count = 0
-        for row in reader:
-            nombre = row.get("Negocio", "").strip()
-            if not nombre: continue
-            rubro = row.get("Categoria", "").strip()
-            distrito = row.get("Distrito", "").strip()
-            direccion = row.get("Direccion", "").strip()
-            
-            plan_assigned = "STARTER"
-            # Aquí iría el resto de tu lógica de importación CSV si la tenías
-            
-    except Exception as e:
-        logger.error(f"Error importando CSV: {e}")
-        return HTMLResponse("Error procesando CSV.")
-    
-    return HTMLResponse("Importación completada.")
+    if not new_leads: 
+        rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#94A3B8;'>No se encontraron nuevos registros o ya existen en la base de datos.</td></tr>"
+        
+    return HTMLResponse(f"""
+    <div style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;min-height:100vh;'>
+        <div style='max-width:1100px; margin:0 auto;'>
+            <h2>🔍 Resultados Importados ({len(new_leads)})</h2>
+            <table style='width:100%; border-collapse:collapse; text-align:left;'>
