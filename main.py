@@ -5,14 +5,13 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import google.generativeai as genai
+import uvicorn
 
-# Configuración de logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# CONFIGURACIÓN SUPABASE VIA REST API DIRECTA
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 supabase_connected = False
@@ -37,7 +36,6 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     logger.warning("⚠️ Faltan variables SUPABASE_URL o SUPABASE_KEY")
 
-# CONFIGURACIÓN GROQ Y GEMINI
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -59,8 +57,6 @@ def call_groq_api(prompt_text):
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- FUNCIONES DE DATOS ---
-
 def get_leads(status="Pendiente"):
     if not supabase_connected: return []
     try:
@@ -69,9 +65,7 @@ def get_leads(status="Pendiente"):
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
     except: 
-        
         return []
-
 
 def get_sent_count():
     if not supabase_connected: return 0
@@ -87,14 +81,11 @@ def insert_lead_supabase(lead):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=headers, json=lead, timeout=5)
-        if resp.status_code in:  [ 200 , 201 , 204 ]
-          
+        if resp.status_code in:            
             return True
         return False
     except: 
         return False
-
-# --- MOTOR DE BÚSQUEDA AUTOMÁTICA MEDIANTE IA ---
 
 def search_leads_google(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
@@ -171,45 +162,28 @@ def search_leads_google(keyword, location, limit=100):
     except: 
         return []
 
-# --- ENDPOINTS REESTRUCTURADOS Y CORREGIDOS ---
-
-@app.api_route("/api/auto-search", methods=["GET", "POST"])
-async def auto_search(request: Request):
-    if request.method == "POST":
-        form = await request.form()
-        keyword = form.get("keyword", "barberia")
-        location = form.get("location", "Lima")
-        limit = min(int(form.get("limit", 10)), 100)
-    else:  # Si entras directo desde el navegador (GET)
-        keyword = request.query_params.get("keyword", "barberia")
-        location = request.query_params.get("location", "Lima")
-        limit = min(int(request.query_params.get("limit", 10)), 100)
-    
-    # Ejecuta la búsqueda programada
-    new_leads = search_leads_google(keyword, location, limit)
-    
-    # Genera la vista visual en HTML de los resultados
-    rows_html = ""
-    for i, lead in enumerate(new_leads, 1):
-        insert_lead_supabase(lead)
-        rows_html += f"""
-        <tr style="border-bottom: 1px solid #1E293B;">
-            <td style="padding:12px; text-align:center;">#{i}</td>
-            <td style="padding:12px; font-weight:bold; color:white;">{lead["nombre"]}</td>
-            <td style="padding:12px;">{lead["rubro"]}</td>
-            <td style="padding:12px;">{lead["distrito"]}</td>
-            <td style="padding:12px; text-align:center;">
-                <span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px;">{lead["plan_sugerido"]}</span>
-            </td>
-            <td style="padding:12px; color:#94A3B8; font-size:0.8rem;"><em>{lead["criterio_match"]}</em></td>
-        </tr>
-        """
-    
-    if not new_leads: 
-        rows_html = "<tr><td colspan='6' style='padding:30px; text-align:center; color:#94A3B8;'>No se encontraron nuevos registros o ya existen en la base de datos.</td></tr>"
-        
-    return HTMLResponse(f"""
-    <div style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;min-height:100vh;'>
-        <div style='max-width:1100px; margin:0 auto;'>
-            <h2>🔍 Resultados Importados ({len(new_leads)})</h2>
-            <table style='width:100%; border-collapse:collapse; text-align:left;'>
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    leads_enviados = get_sent_count()
+    return f"""
+    <div style='background:#080A0F; color:white; padding:40px; font-family:sans-serif; min-height:100vh;'>
+        <div style='max-width:800px; margin:0 auto; background:#111827; padding:30px; border-radius:12px; border:1px solid #1E293B;'>
+            <h1 style='color:#A78BFA; margin-top:0;'>🚀 Sistema de Extracción e Importación de Leads</h1>
+            <p style='color:#94A3B8;'>Estado de Supabase: {"🟢 Conectado" if supabase_connected else "🔴 Desconectado"}</p>
+            <p style='color:#94A3B8;'>Leads procesados y enviados en total: <strong>{leads_enviados}</strong></p>
+            
+            <hr style='border-color:#1E293B; margin:30px 0;'>
+            
+            <h3>🔍 1. Búsqueda Automática (Google Maps + IA)</h3>
+            <form action='/api/auto-search' method='POST' style='display:grid; gap:15px;'>
+                <label>Palabra clave (Rubro): <input type='text' name='keyword' value='barberia' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
+                <label>Ubicación (Distrito/Ciudad): <input type='text' name='location' value='Lima' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
+                <label>Límite de resultados: <input type='number' name='limit' value='10' max='100' style='width:100%; padding:8px; background:#1E293B; border:1px solid #334155; color:white; border-radius:6px;'></label>
+                <button type='submit' style='background:#7C3AED; color:white; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;'>Buscar e Importar a Supabase</button>
+            </form>
+            
+            <hr style='border-color:#1E293B; margin:30px 0;'>
+            
+            <h3>📋 2. Importación Manual por Bloque CSV</h3>
+            <p style='font-size:0.85rem; color:#94A3B8;'>Formato de columnas requerido: <code>Negocio,Categoria,Distrito,Direccion</code></p>
+            <form action='/api/import-personal-csv' method='POST' style='display:grid; gap:15px;'>
