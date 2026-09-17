@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+ï»¿from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 import os, smtplib, random, logging, requests, time, json, csv, io
 from email.mime.text import MIMEText
@@ -28,11 +28,11 @@ if SUPABASE_URL and SUPABASE_KEY:
         
         if response.status_code == 200:
             supabase_connected = True
-            logger.info("? Conexión REST a Supabase exitosa")
+            logger.info("Conexion REST a Supabase exitosa")
         else:
-            logger.error(f" Error REST Supabase: {response.status_code}")
+            logger.error(f"Error REST Supabase: {response.status_code}")
     except Exception as e:
-        logger.error(f"? Excepción conectando a Supabase: {e}")
+        logger.error(f"Excepcion conectando a Supabase: {e}")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -48,7 +48,7 @@ def call_groq_api(prompt_text):
     try:
         response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
+            return response.json()["choices"]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: 
         return None
 
@@ -92,10 +92,10 @@ def search_leads_google(keyword, location, limit=100):
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType"}
     payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
     PITCHES = {
-        "STARTER": "¡Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada.",
-        "MANAGER": "¡Hola, {nombre}! Optimiza tu negocio con nuestro sistema de reservas.",
-        "PRO": "¡Hola, {nombre}! Automatiza tu atención con nuestro Chatbot IA.",
-        "CUSTOM": "¡Hola, {nombre}! Desarrollamos módulos 100% a medida."
+        "STARTER": "Hola, {nombre}! Notamos que no cuentan con una plataforma web optimizada.",
+        "MANAGER": "Hola, {nombre}! Optimiza tu negocio con nuestro sistema de reservas.",
+        "PRO": "Hola, {nombre}! Automatiza tu atencion con nuestro Chatbot IA.",
+        "CUSTOM": "Hola, {nombre}! Desarrollamos modulos 100% a medida."
     }
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=12)
@@ -111,7 +111,7 @@ def search_leads_google(keyword, location, limit=100):
             tipo_google = place.get('primaryType', 'Desconocido')
             prompt_clasificacion = f'Clasifica la empresa "{name}" en STARTER, MANAGER, PRO o CUSTOM. Responde solo JSON: {{"plan": "VALOR", "criterio": "RAZON"}}'
             plan_assigned = "STARTER"
-            criterio_match = "Clasificación base."
+            criterio_match = "Clasificacion base."
             try:
                 respuesta_ia = None
                 if GEMINI_API_KEY:
@@ -150,7 +150,7 @@ def search_leads_google(keyword, location, limit=100):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     leads_enviados = get_sent_count()
-    return f"<html><body style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;'><h2>?? Sistema Activo</h2><p>Leads enviados: {leads_enviados}</p><form action='/api/auto-search' method='POST'><input type='text' name='keyword' value='barberia'><input type='text' name='location' value='Lima'><button type='submit'>Buscar</button></form></body></html>"
+    return f"<html><body style='background:#080A0F;color:white;padding:40px;font-family:sans-serif;'><h2>Sistema Activo</h2><p>Leads enviados: {leads_enviados}</p><form action='/api/auto-search' method='POST'><input type='text' name='keyword' value='barberia'><input type='text' name='location' value='Lima'><button type='submit'>Buscar</button></form></body></html>"
 
 @app.api_route("/api/auto-search", methods=["GET", "POST"])
 async def auto_search(request: Request):
