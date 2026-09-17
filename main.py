@@ -1,8 +1,6 @@
 ﻿from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-import os, smtplib, random, logging, requests, time, json, csv, io
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from fastapi.responses import HTMLResponse
+import os, logging, requests, json, csv, io
 from datetime import datetime
 import google.generativeai as genai
 import uvicorn
@@ -25,14 +23,11 @@ if SUPABASE_URL and SUPABASE_KEY:
         }
         test_url = f"{SUPABASE_URL}/rest/v1/leads?select=id&limit=1"
         response = requests.get(test_url, headers=headers, timeout=5)
-        
         if response.status_code == 200:
             supabase_connected = True
             logger.info("Conexion REST a Supabase exitosa")
-        else:
-            logger.error(f"Error REST Supabase: {response.status_code}")
     except Exception as e:
-        logger.error(f"Excepcion conectando a Supabase: {e}")
+        logger.error(f"Excepcion Supabase: {e}")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -48,7 +43,7 @@ def call_groq_api(prompt_text):
     try:
         response = requests.post("https://groq.com", headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
-            return response.json()["choices"]["message"]["content"].strip().replace('"', '').replace("'", "")
+            return response.json()["choices"][0]["message"]["content"].strip().replace('"', '').replace("'", "")
     except: 
         return None
 
@@ -79,7 +74,7 @@ def insert_lead_supabase(lead):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=headers, json=lead, timeout=5)
-        if resp.status_code in:            
+        if resp.status_code in [200, 201, 204]:            
             return True
         return False
     except: 
