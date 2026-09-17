@@ -175,10 +175,11 @@ async def dashboard():
         email_dest = lead.get("email", "").strip()
         tel_dest = lead.get("telefono", "").strip()
         texto_msg = urllib.parse.quote(lead.get("pitch_automatizado", ""))
+        lead_id = lead.get("id")
         if email_dest:
-            btn_accion = f"<form action='/api/send-email/{lead.get(\"id\")}' method='POST' style='margin:0;'><button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; font-weight:bold; cursor:pointer;'>Despachar Email</button></form>"
+            btn_accion = f"<form action='/api/send-email/{lead_id}' method='POST' style='margin:0;'><button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; font-weight:bold; cursor:pointer;'>Despachar Email</button></form>"
         elif tel_dest:
-            btn_accion = f"<a href='https://whatsapp.com{tel_dest}&text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead.get(\"id\")}\", {{method: \"POST\"}}); setTimeout(function(){{location.reload();}}, 1000);' style='background:#22C55E; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:0.8rem; font-weight:bold; display:inline-block;'>Enviar WA</a>"
+            btn_accion = f"<a href='https://whatsapp.com{tel_dest}&text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead_id}\", {{method: \"POST\"}}); setTimeout(function(){{location.reload();}}, 1000);' style='background:#22C55E; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:0.8rem; font-weight:bold; display:inline-block;'>Enviar WA</a>"
         else:
             btn_accion = "<span style='color:#64748B;'>Sin Contacto</span>"
         rows_html += f"""<tr style="border-bottom: 1px solid #1E293B;"><td style="padding:12px; text-align:center; color:#64748B;">#{i}</td><td style="padding:12px; font-weight:600; color:white;">{lead.get("nombre")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("rubro")}</td><td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td><td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem; font-weight:600;">{lead.get("plan_sugerido")}</span></td><td style="padding:12px; text-align:center;">{btn_accion}</td></tr>"""
