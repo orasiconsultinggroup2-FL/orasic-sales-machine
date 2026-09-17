@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
 import os, logging, requests, json, csv, io, smtplib, urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -33,21 +33,65 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
+# --- DICCIONARIO DE SINÓNIMOS/TÉRMINOS RELACIONADOS POR CATEGORÍA ---
+
+TERMINOS_RELACIONADOS = {
+    "mascotas": [
+        "Pet Shops", "Veterinarias", "Tienda de mascotas", "Alimentos para perros", 
+        "Accesorios para mascotas", "Peluquería canina", "Hospedaje para mascotas", 
+        "Guardería canina", "Entrenamiento de perros", "Clínica veterinaria",
+        "Farmacia veterinaria", "Juguetes para mascotas", "Ropa para perros"
+    ],
+    "belleza": [
+        "Barberías", "Peluquerías", "Salones de belleza", "Estéticas", 
+        "Manicure", "Pedicure", "Spa", "Maquillaje", "Depilación",
+        "Tratamientos faciales", "Uñas acrílicas", "Extensiones de pestañas"
+    ],
+    "salud": [
+        "Clínicas", "Consultorios médicos", "Dentistas", "Odontólogos",
+        "Laboratorios clínicos", "Farmacias", "Centros de salud", 
+        "Fisioterapia", "Quiropráctica", "Nutricionistas", "Psicólogos"
+    ],
+    "comida": [
+        "Restaurantes", "Cafeterías", "Bares", "Discotecas", "Comida rápida",
+        "Pizzerías", "Hamburgueserías", "Sushi", "Mariscos", "Pollerías",
+        "Chifas", "Postres", "Heladerías", "Panaderías", "Pastelerías"
+    ],
+    "fitness": [
+        "Gimnasios", "CrossFit", "Yoga", "Pilates", "Centros deportivos",
+        "Canchas de fútbol", "Canchas de tenis", "Piscinas", "Spa deportivo",
+        "Entrenadores personales", "Artes marciales", "Boxeo", "Danza"
+    ],
+    "educacion": [
+        "Colegios", "Academias", "Universidades", "Institutos", "Guarderías",
+        "Centros de idiomas", "Capacitación", "Talleres", "Cursos",
+        "Bibliotecas", "Ludotecas", "Centros de estudio"
+    ],
+    "automotriz": [
+        "Talleres mecánicos", "Lavaderos de autos", "Repuestos", "Neumáticos",
+        "Concesionarios", "Seguros automotrices", "Alquiler de autos",
+        "Pintura automotriz", "Electrónica automotriz", "Detailing"
+    ],
+    "construccion": [
+        "Constructoras", "Arquitectos", "Inmobiliarias", "Ferreterías",
+        "Materiales de construcción", "Pinturerías", "Cerrajerías",
+        "Electricistas", "Plomeros", "Albañiles", "Diseño de interiores"
+    ],
+    "tecnologia": [
+        "Tiendas de computadoras", "Reparación de celulares", "Imprentas",
+        "Diseño gráfico", "Marketing digital", "Desarrollo web",
+        "Soporte técnico", "Redes", "Seguridad informática", "Videojuegos"
+    ],
+    "ropa": [
+        "Tiendas de ropa", "Zapaterías", "Boutiques", "Moda", "Calzado",
+        "Accesorios de moda", "Joyerías", "Relojerías", "Lencería",
+        "Ropa deportiva", "Uniformes", "Disfraces", "Costureras"
+    ]
+}
+
 # --- LISTAS PREDEFINIDAS PARA DROPDOWNS ---
 
-RUBROS_NEGOCIOS = [
-    "Abogados", "Academias", "Agencias de Viajes", "Almacenes", "Arquitectos", 
-    "Asesorías", "Automotriz", "Bancos", "Barberías", "Bares", "Bibliotecas", 
-    "Bodegas", "Boutiques", "Cafeterías", "Calzados", "Canchas Deportivas", 
-    "Carnicerías", "Centros Comerciales", "Cerámicas", "Clínicas", "Colegios", 
-    "Consultoras", "Constructoras", "Contadores", "Dentistas", "Discotecas", 
-    "Estéticas", "Farmacias", "Ferreterías", "Fitness", "Florerías", 
-    "Gimnasios", "Hoteles", "Imprentas", "Jardinería", "Joyeros", "Laboratorios", 
-    "Lavanderías", "Librerías", "Mascotas", "Mecánicos", "Medicinas", 
-    "Mueblerías", "Ópticas", "Panaderías", "Peluquerías", "Pet Shops", 
-    "Polideportivos", "Restaurantes", "Salones de Eventos", "Supermercados", 
-    "Talleres", "Tiendas de Ropa", "Veterinarias", "Zapaterías", "Otro"
-]
+RUBROS_NEGOCIOS = list(TERMINOS_RELACIONADOS.keys()) + ["Otro"]
 
 DISTRITOS_LIMA = [
     "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", 
@@ -137,59 +181,81 @@ def send_email_pitch(to_email, business_name, pitch_text):
         logger.error(f"Error enviando email: {e}")
         return False
 
-# --- MOTOR DE BÚSQUEDA UNIVERSAL GOOGLE MAPS ---
+# --- MOTOR DE BÚSQUEDA INTELIGENTE CON EXPANSIÓN DE TÉRMINOS ---
 
-def search_leads_google(keyword, location, limit=100):
+def search_leads_google_expanded(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
     
-    url = "https://places.googleapis.com/v1/places:searchText"
-    headers = {
-        "Content-Type": "application/json", 
-        "X-Goog-Api-Key": GOOGLE_KEY, 
-        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"
-    }
-    payload = {"textQuery": f"{keyword} en {location}", "maxResultCount": min(limit, 100), "languageCode": "es"}
+    terminos_busqueda = [keyword]
+    keyword_lower = keyword.lower().strip()
     
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=12)
-        if resp.status_code != 200: 
-            logger.error(f"Error Google Maps: {resp.status_code}")
-            return []
-            
-        places = resp.json().get("places", [])
-        new_leads = []
-        existing_leads = get_leads("Pendiente") + get_leads("Enviado")
-        existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+    for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
+        if categoria in keyword_lower or any(sinonimo.lower() in keyword_lower for sinonimo in sinonimos):
+            terminos_busqueda.extend(sinonimos)
+            break
+    
+    terminos_unicos = []
+    for t in terminos_busqueda:
+        if t.lower() not in [x.lower() for x in terminos_unicos]:
+            terminos_unicos.append(t)
+    
+    all_leads = []
+    existing_leads = get_leads("Pendiente") + get_leads("Enviado")
+    existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+    
+    for termino in terminos_unicos:
+        url = "https://places.googleapis.com/v1/places:searchText"
+        headers = {
+            "Content-Type": "application/json", 
+            "X-Goog-Api-Key": GOOGLE_KEY, 
+            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"
+        }
+        payload = {"textQuery": f"{termino} en {location}", "maxResultCount": min(limit, 50), "languageCode": "es"}
         
-        for place in places:
-            name = place.get("displayName", {}).get("text", "").strip()
-            if not name or name.lower() in existing_names: continue
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=12)
+            if resp.status_code != 200: 
+                continue
+                
+            places = resp.json().get("places", [])
             
-            tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
-            pitch_simple = f"Hola equipo de {name}, soy Fernando de ORASIC Lab. Vi su negocio de {keyword} en {location} y tengo una propuesta digital para potenciar sus ventas."
+            for place in places:
+                name = place.get("displayName", {}).get("text", "").strip()
+                if not name or name.lower() in existing_names: continue
+                
+                tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
+                pitch_simple = f"Hola equipo de {name}, soy Fernando de ORASIC Lab. Vi su negocio en {location} y tengo una propuesta digital para potenciar sus ventas."
 
-            lead = {
-                "nombre": name, 
-                "rubro": keyword.capitalize(), 
-                "distrito": location.title(), 
-                "plan_sugerido": "STARTER",  
-                "criterio_match": "Búsqueda Universal Google Maps", 
-                "origen": "GOOGLE_MAPS", 
-                "estado": "Pendiente",
-                "email": "",
-                "telefono": tel,
-                "direccion_completa": place.get("formattedAddress", ""), 
-                "pitch_automatizado": pitch_simple,
-                "datos_originales": {"Categoria": keyword, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", "")},
-                "created_at": datetime.now().isoformat()
-            }
-            new_leads.append(lead)
-            existing_names.add(name.lower())
-        return new_leads
-    except Exception as e:
-        logger.error(f"Error en search_leads_google: {e}")
-        return []
+                lead = {
+                    "nombre": name, 
+                    "rubro": termino.capitalize(), 
+                    "distrito": location.title(), 
+                    "plan_sugerido": "STARTER",  
+                    "criterio_match": f"Búsqueda expandida: '{keyword}' → '{termino}'", 
+                    "origen": "GOOGLE_MAPS_EXPANDED", 
+                    "estado": "Pendiente",
+                    "email": "",
+                    "telefono": tel,
+                    "direccion_completa": place.get("formattedAddress", ""), 
+                    "pitch_automatizado": pitch_simple,
+                    "datos_originales": {"Categoria": termino, "Distrito": location, "Negocio": name, "Direccion": place.get("formattedAddress", ""), "BusquedaOriginal": keyword},
+                    "created_at": datetime.now().isoformat()
+                }
+                all_leads.append(lead)
+                existing_names.add(name.lower())
+                
+                if len(all_leads) >= limit:
+                    break
+                    
+            if len(all_leads) >= limit:
+                break
+                
+        except Exception as e:
+            logger.error(f"Error buscando '{termino}': {e}")
+            continue
+            
+    return all_leads[:limit]
 
 # --- RUTAS DE LA API ---
 
@@ -198,28 +264,30 @@ async def auto_search(request: Request):
     form = await request.form()
     keyword = form.get("keyword", "")
     location = form.get("location", "")
-    limit = min(int(form.get("limit", 10)), 100)
+    limit = min(int(form.get("limit", 50)), 100)
     
-    # Si selecciona "Otro", usa el texto libre, sino usa el seleccionado
     if keyword == "Otro":
         keyword = form.get("keyword_other", "").strip()
     if location == "Otro":
         location = form.get("location_other", "").strip()
 
     if not keyword or not location:
-        return JSONResponse({"error": "Debes ingresar un rubro y un distrito"}, status_code=400)
+        # Si hay error, redirigir al dashboard con mensaje de error
+        return RedirectResponse(url="/?error=Faltan+datos", status_code=303)
 
-    new_leads = search_leads_google(keyword, location, limit)
+    # Ejecutar búsqueda inteligente
+    new_leads = search_leads_google_expanded(keyword, location, limit)
     
     count_inserted = 0
     for lead in new_leads:
         if insert_lead_supabase(lead):
             count_inserted += 1
             
-    return JSONResponse({
-        "mensaje": f"Búsqueda completada. {len(new_leads)} encontrados, {count_inserted} guardados.", 
-        "leads": new_leads
-    })
+    # REDIRIGIR AL DASHBOARD CON MENSAJE DE ÉXITO
+    message = f"Búsqueda inteligente completada. Busqué '{keyword}' y términos relacionados. {len(new_leads)} encontrados, {count_inserted} guardados."
+    encoded_message = urllib.parse.quote(message)
+    
+    return RedirectResponse(url=f"/?success={encoded_message}", status_code=303)
 
 @app.post("/api/mark-sent/{lead_id}")
 async def mark_sent(lead_id: str):
@@ -322,12 +390,27 @@ async def export_csv():
         headers={"Content-Disposition": "attachment; filename=leads_orasic_avanzado.csv"}
     )
 
-# --- DASHBOARD VISUAL CON DROPDOWNS ---
+# --- DASHBOARD VISUAL CON MENSAJES DE ESTADO ---
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
+async def dashboard(success: str = None, error: str = None):
     leads_enviados = get_sent_count()
     leads_pendientes = get_leads("Pendiente")
+    
+    # Generar mensajes de alerta
+    alert_html = ""
+    if success:
+        alert_html = f"""
+        <div style="background:#064E3B; border-left:4px solid #10B981; color:#ECFDF5; padding:15px; margin-bottom:20px; border-radius:4px;">
+            ✅ {urllib.parse.unquote(success)}
+        </div>
+        """
+    elif error:
+        alert_html = f"""
+        <div style="background:#7F1D1D; border-left:4px solid #EF4444; color:#FEF2F2; padding:15px; margin-bottom:20px; border-radius:4px;">
+            ❌ {urllib.parse.unquote(error)}
+        </div>
+        """
     
     rows_html = ""
     for i, lead in enumerate(leads_pendientes, 1):
@@ -339,7 +422,7 @@ async def dashboard():
         if email_dest:
             btn_accion = f"""
             <form action='/api/send-email/{lead_id}' method='POST' style='margin:0;'>
-                <button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; cursor:pointer;'>📧 Email</button>
+                <button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; cursor:pointer;'> Email</button>
             </form>
             """
         elif tel_dest:
@@ -364,8 +447,7 @@ async def dashboard():
     
     if not rows_html: rows_html = "<tr><td colspan='7' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
     
-    # Generar opciones de dropdowns
-    rubro_options = "".join([f'<option value="{r}">{r}</option>' for r in RUBROS_NEGOCIOS])
+    rubro_options = "".join([f'<option value="{r}">{r.title()}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}">{d}</option>' for d in DISTRITOS_LIMA])
     
     html_content = f"""
@@ -385,6 +467,8 @@ async def dashboard():
             select, input {{ padding:10px; border-radius:4px; border:1px solid #475569; background:#0F172A; color:white; flex:1; min-width:150px; }}
             button.search-btn {{ background:#A78BFA; color:white; border:none; padding:10px 20px; border-radius:4px; cursor:pointer; font-weight:bold; }}
             .other-input {{ display:none; margin-top:5px; }}
+            .info-box {{ background:#1E293B; padding:15px; border-radius:8px; margin-bottom:20px; border-left: 4px solid #A78BFA; }}
+            .info-box p {{ margin:0; color:#CBD5E1; font-size:0.9rem; }}
         </style>
         <script>
             function toggleOther(selectId, inputId) {{
@@ -404,20 +488,24 @@ async def dashboard():
         <div style="max-width:1000px; margin:0 auto;">
             <h1 style="text-align:center; margin-bottom:40px;"> ORASIC Sales Machine</h1>
             
+            {alert_html}
+            
+            <div class="info-box">
+                <p> <strong>Búsqueda Inteligente:</strong> Cuando seleccionas una categoría (ej: "mascotas"), el sistema busca automáticamente todos los términos relacionados (Pet Shops, Veterinarias, Tiendas de mascotas, etc.) para encontrar más negocios.</p>
+            </div>
+            
             <div class="search-box">
                 <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex:1; flex-wrap:wrap;">
                     
-                    <!-- Dropdown Rubro -->
                     <div style="flex:1; min-width:200px;">
-                        <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Rubro / Categoría</label>
+                        <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Categoría de Negocio</label>
                         <select name="keyword" id="keyword_select" onchange="toggleOther('keyword_select', 'keyword_other')" required>
-                            <option value="" disabled selected>Selecciona un rubro</option>
+                            <option value="" disabled selected>Selecciona una categoría</option>
                             {rubro_options}
                         </select>
-                        <input type="text" id="keyword_other" name="keyword_other" placeholder="Escribe otro rubro..." class="other-input">
+                        <input type="text" id="keyword_other" name="keyword_other" placeholder="Escribe otra categoría..." class="other-input">
                     </div>
 
-                    <!-- Dropdown Distrito -->
                     <div style="flex:1; min-width:200px;">
                         <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Distrito / Ubicación</label>
                         <select name="location" id="location_select" onchange="toggleOther('location_select', 'location_other')" required>
@@ -429,17 +517,17 @@ async def dashboard():
 
                     <div style="width:100px;">
                         <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Cantidad</label>
-                        <input type="number" name="limit" value="20" min="1" max="100">
+                        <input type="number" name="limit" value="50" min="1" max="100">
                     </div>
 
-                    <button type="submit" class="search-btn">🔍 Buscar</button>
+                    <button type="submit" class="search-btn">🔍 Buscar Inteligente</button>
                 </form>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
                 <div><strong>Enviados:</strong> <span style="color:#22C55E; font-size:1.5rem;">{leads_enviados}</span></div>
                 <div><strong>Pendientes:</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(leads_pendientes)}</span></div>
-                <a href="/api/export-csv" class="btn-export"> Exportar CSV</a>
+                <a href="/api/export-csv" class="btn-export">📥 Exportar CSV</a>
             </div>
             
             <table>
@@ -454,7 +542,7 @@ async def dashboard():
             </table>
             
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B; font-size:0.9rem;">v4.0 • Dropdowns Inteligentes • Exportación Avanzada</p>
+                <p style="color:#64748B; font-size:0.9rem;">v6.0 • Redirección Automática al Dashboard • Búsqueda Inteligente Expandida</p>
             </div>
         </div>
     </body>
