@@ -200,9 +200,13 @@ def search_leads_google_expanded(keyword, location, limit=100):
         if t.lower() not in [x.lower() for x in terminos_unicos]:
             terminos_unicos.append(t)
     
+    logger.info(f"🔍 Buscando '{keyword}' en '{location}'. Términos expandidos: {terminos_unicos}")
+    
     all_leads = []
     existing_leads = get_leads("Pendiente") + get_leads("Enviado")
     existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
+    
+    logger.info(f" Leads existentes en BD: {len(existing_leads)} (Nombres: {list(existing_names)[:5]}...)")
     
     for termino in terminos_unicos:
         url = "https://places.googleapis.com/v1/places:searchText"
@@ -216,13 +220,22 @@ def search_leads_google_expanded(keyword, location, limit=100):
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=12)
             if resp.status_code != 200: 
+                logger.warning(f"️ Google Maps devolvió status {resp.status_code} para '{termino}'")
                 continue
                 
             places = resp.json().get("places", [])
+            logger.info(f"✅ Google encontró {len(places)} lugares para '{termino}' en {location}")
             
             for place in places:
                 name = place.get("displayName", {}).get("text", "").strip()
-                if not name or name.lower() in existing_names: continue
+                if not name:
+                    logger.debug(f"❌ Nombre vacío, saltando")
+                    continue
+                    
+                name_lower = name.lower()
+                if name_lower in existing_names:
+                    logger.debug(f"⚠️ DUPLICADO DETECTADO: '{name}' ya existe en BD")
+                    continue
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
                 pitch_simple = f"Hola equipo de {name}, soy Fernando de ORASIC Lab. Vi su negocio en {location} y tengo una propuesta digital para potenciar sus ventas."
@@ -243,20 +256,22 @@ def search_leads_google_expanded(keyword, location, limit=100):
                     "created_at": datetime.now().isoformat()
                 }
                 all_leads.append(lead)
-                existing_names.add(name.lower())
+                existing_names.add(name_lower)
+                logger.info(f" Lead agregado: {name} ({termino})")
                 
                 if len(all_leads) >= limit:
+                    logger.info(f"🛑 Límite de {limit} leads alcanzado")
                     break
                     
             if len(all_leads) >= limit:
                 break
                 
         except Exception as e:
-            logger.error(f"Error buscando '{termino}': {e}")
+            logger.error(f"❌ Error buscando '{termino}': {e}")
             continue
             
+    logger.info(f" TOTAL ENCONTRADOS: {len(all_leads)} leads nuevos para '{keyword}' en {location}")
     return all_leads[:limit]
-
 # --- RUTAS DE LA API ---
 
 @app.post("/api/auto-search")
