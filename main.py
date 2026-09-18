@@ -27,30 +27,6 @@ if SUPABASE_URL and SUPABASE_KEY:
         if response.status_code == 200:
             supabase_connected = True
             logger.info("✅ Conexión REST a Supabase exitosa")
-            
-            # AUTO-REPARACIÓN DE ORIGEN AL INICIAR
-            try:
-                url_leads = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&select=id,origen,direccion_completa"
-                resp_leads = requests.get(url_leads, headers=headers, timeout=10)
-                if resp_leads.status_code == 200:
-                    leads_db = resp_leads.json()
-                    for lead in leads_db:
-                        current_origin = lead.get("origen", "")
-                        # Normalizar origen para consistencia
-                        if current_origin.lower() == "manual":
-                            new_origin = "MANUAL_BASE"
-                        elif not current_origin or current_origin == "Desconocido":
-                            new_origin = "GOOGLE_LEGACY" if lead.get("direccion_completa") and len(lead.get("direccion_completa", "")) > 10 else "MANUAL_BASE"
-                        else:
-                            new_origin = current_origin
-                            
-                        if new_origin != current_origin:
-                            update_url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead['id']}"
-                            requests.patch(update_url, headers=headers, json={"origen": new_origin}, timeout=5)
-                    logger.info(" Auto-reparación de orígenes completada.")
-            except Exception as e_fix:
-                logger.error(f"Error en auto-reparación: {e_fix}")
-                
     except Exception as e:
         logger.error(f"❌ Excepción Supabase: {e}")
 
@@ -138,8 +114,6 @@ def search_leads_google_expanded(keyword, location, limit=100):
         d = normalizar_agresivo(l.get('distrito', ''))
         existing_keys.add((n, d))
         
-    logger.info(f"📊 Cargadas {len(existing_keys)} combinaciones únicas (Nombre+Distrito) de la BD")
-    
     for termino in terminos_unicos:
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
@@ -166,16 +140,13 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
                 
-                # PLAN NEUTRO: STARTER por defecto
-                plan_asignado = "STARTER"
-                
                 lead = {
                     "nombre": name, 
                     "rubro": keyword_clean,
                     "distrito": location.title(), 
-                    "plan_sugerido": plan_asignado,
+                    "plan_sugerido": "STARTER",
                     "criterio_match": f"Búsqueda: '{termino}'", 
-                    "origen": "GOOGLE_SEARCH", # Etiqueta clara para la búsqueda actual
+                    "origen": "GOOGLE_SEARCH", 
                     "estado": "Pendiente",
                     "email": "",
                     "telefono": tel,
@@ -228,7 +199,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     leads_enviados = get_sent_count()
     all_leads_pendientes = get_leads("Pendiente")
     
-    # Decodificar resultados de búsqueda si existen
+    # Decodificar resultados de búsqueda
     search_leads_list = []
     if search_results:
         try:
@@ -236,25 +207,33 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         except:
             search_leads_list = []
     
-    # LÓGICA DE FILTRADO CLARA:
-    # 1. Base Manual: Leads de BD que NO son de la búsqueda actual (o todos si no hay búsqueda)
-    # 2. Google: Solo los leads de la búsqueda actual
-    # 3. Todos: Suma de ambos
+    # LÓGICA CLAVE v10.2:
+    # Por defecto (sin filtro), mostrar SOLO resultados de búsqueda si existen
+    # Si no hay búsqueda, mostrar base manual
+    # "Todos" = Suma de ambos
+    # "Google" = Solo búsqueda
+    # "Manual" = Solo base
     
     manual_base_leads = [l for l in all_leads_pendientes if l.get("origen") != "GOOGLE_SEARCH"]
     google_new_leads = search_leads_list
     
     if filter_origin == "google":
         filtered_leads = google_new_leads
-        view_title = "RESULTADOS GOOGLE (Nuevos)"
+        view_title = "RESULTADOS GOOGLE"
     elif filter_origin == "manual":
         filtered_leads = manual_base_leads
-        view_title = "BASE MANUAL (Antiguos)"
-    else:
-        # VISTA TODOS: Fusionamos sin duplicar IDs (si vinieran repetidos)
-        # Como los de Google son temporales y no tienen ID real aún, los concatenamos directamente
+        view_title = "BASE MANUAL"
+    elif filter_origin == "all":
         filtered_leads = manual_base_leads + google_new_leads
         view_title = "TODOS (Base + Google)"
+    else:
+        # VISTA POR DEFECTO: Solo búsqueda si existe, sino base manual
+        if google_new_leads:
+            filtered_leads = google_new_leads
+            view_title = "RESULTADOS DE BÚSQUEDA"
+        else:
+            filtered_leads = manual_base_leads
+            view_title = "BASE MANUAL"
     
     alert_html = ""
     if success:
@@ -270,7 +249,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         lead_id = lead.get("id", "temp_" + str(i))
         origen = lead.get("origen", "Desconocido")
         
-        # Badges visuales claros
         if origen == "GOOGLE_SEARCH":
             origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">🔍 GOOGLE</span>'
         elif origen in ["MANUAL_BASE", "manual", "MANUAL_CSV"]:
@@ -298,7 +276,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     rubro_options = "".join([f'<option value="{r}" {"selected" if r == last_keyword else ""}>{r}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}" {"selected" if d == last_location else ""}>{d}</option>' for d in DISTRITOS_LIMA])
     
-    # Contadores exactos según la definición nueva
     count_manual = len(manual_base_leads)
     count_google = len(google_new_leads)
     count_total = count_manual + count_google
@@ -358,11 +335,10 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
                 </form>
             </div>
             
-            <!-- BOTONES DE FILTRO CON ETIQUETAS CORRECTAS -->
             <div class="filter-buttons">
-                <a href="/?filter_origin=all{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'all' or not filter_origin else ''}"> Todos ({count_total})</a>
-                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'google' else ''}">🔍 Google ({count_google})</a>
-                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'manual' else ''}">📁 Base Manual ({count_manual})</a>
+                <a href="/?filter_origin=all{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'all' else ''}"> Todos ({count_total})</a>
+                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_new_leads) else ''}">🔍 Google ({count_google})</a>
+                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_new_leads) else ''}">📁 Base Manual ({count_manual})</a>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
@@ -377,11 +353,11 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </table>
             
             <div style="margin-top:20px; text-align:center;">
-                 <a href="/" style="color:#94A3B8; text-decoration:underline;">🔄 Limpiar búsqueda y ver solo Base Manual ({count_manual})</a>
+                 <a href="/" style="color:#94A3B8; text-decoration:underline;">🔄 Limpiar búsqueda</a>
             </div>
 
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v10.1 • Vista Combinada Clara (Base Manual + Google) • Plan Neutro</p>
+                <p style="color:#64748B;">v10.2 • Vista Default = Solo Búsqueda • Base Limpia • Plan Neutro</p>
             </div>
         </div>
     </body>
