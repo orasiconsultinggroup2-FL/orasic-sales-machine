@@ -28,7 +28,7 @@ if SUPABASE_URL and SUPABASE_KEY:
             supabase_connected = True
             logger.info("✅ Conexión REST a Supabase exitosa")
             
-            # AUTO-REPARACIÓN DE ORIGEN AL INICIAR
+            # AUTO-REPARACIÓN DE ORIGEN AL INICIAR (Corrige 'manual' -> 'MANUAL_CSV')
             try:
                 url_leads = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&select=id,origen,direccion_completa"
                 resp_leads = requests.get(url_leads, headers=headers, timeout=10)
@@ -36,11 +36,17 @@ if SUPABASE_URL and SUPABASE_KEY:
                     leads_db = resp_leads.json()
                     for lead in leads_db:
                         current_origin = lead.get("origen", "")
-                        if not current_origin or current_origin == "manual" or current_origin == "Desconocido":
+                        # Normalizar origen
+                        if current_origin.lower() == "manual":
+                            new_origin = "MANUAL_CSV"
+                        elif not current_origin or current_origin == "Desconocido":
                             new_origin = "GOOGLE_MAPS_LEGACY" if lead.get("direccion_completa") and len(lead.get("direccion_completa", "")) > 10 else "MANUAL_CSV"
-                            if new_origin != current_origin:
-                                update_url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead['id']}"
-                                requests.patch(update_url, headers=headers, json={"origen": new_origin}, timeout=5)
+                        else:
+                            new_origin = current_origin
+                            
+                        if new_origin != current_origin:
+                            update_url = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead['id']}"
+                            requests.patch(update_url, headers=headers, json={"origen": new_origin}, timeout=5)
                     logger.info(" Auto-reparación de orígenes completada.")
             except Exception as e_fix:
                 logger.error(f"Error en auto-reparación: {e_fix}")
@@ -126,15 +132,12 @@ def search_leads_google_expanded(keyword, location, limit=100):
     all_leads = []
     existing_leads = get_leads("Pendiente") + get_leads("Enviado")
     
-    # CONSTRUCCIÓN EXPLÍCITA DE CLAVES (NOMBRE + DISTRITO)
     existing_keys = set()
     for l in existing_leads:
         n = normalizar_agresivo(l.get('nombre', ''))
         d = normalizar_agresivo(l.get('distrito', ''))
         existing_keys.add((n, d))
         
-    logger.info(f"📊 Cargadas {len(existing_keys)} combinaciones únicas (Nombre+Distrito) de la BD")
-    
     for termino in terminos_unicos:
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
@@ -157,7 +160,6 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 loc_norm = normalizar_agresivo(location)
                 current_key = (name_norm, loc_norm)
                 
-                # VERIFICACIÓN ESTRICTA: Solo es duplicado si AMBOS coinciden
                 is_duplicate = current_key in existing_keys
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
@@ -208,83 +210,84 @@ async def auto_search(request: Request):
             if insert_lead_supabase(lead):
                 count_inserted += 1
     
-    preview_leads = new_leads[:5]
-    preview_json = json.dumps(preview_leads)
-    encoded_preview = urllib.parse.quote(preview_json)
+    # Codificar TODOS los resultados para mostrarlos en la tabla principal
+    results_json = json.dumps(new_leads)
+    encoded_results = urllib.parse.quote(results_json)
     
     msg = f"Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados. {count_inserted} guardados (nuevos). {len(new_leads)-count_inserted} duplicados."
     
-    return RedirectResponse(url=f"/?success={urllib.parse.quote(msg)}&last_keyword={urllib.parse.quote(keyword)}&last_location={urllib.parse.quote(location)}&preview={encoded_preview}", status_code=303)
+    # Redirigir pasando los resultados en la URL para mostrarlos en la tabla
+    return RedirectResponse(url=f"/?success={urllib.parse.quote(msg)}&last_keyword={urllib.parse.quote(keyword)}&last_location={urllib.parse.quote(location)}&search_results={encoded_results}", status_code=303)
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None, preview: str = None):
+async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None, search_results: str = None):
     leads_enviados = get_sent_count()
     all_leads_pendientes = get_leads("Pendiente")
     
+    # LÓGICA CLAVE: Si hay resultados de búsqueda, usar esos. Si no, usar la BD.
+    if search_results:
+        try:
+            current_leads = json.loads(urllib.parse.unquote(search_results))
+            view_mode = "RESULTADOS DE BÚSQUEDA"
+        except:
+            current_leads = all_leads_pendientes
+            view_mode = "TODOS LOS PENDIENTES"
+    else:
+        current_leads = all_leads_pendientes
+        view_mode = "TODOS LOS PENDIENTES"
+    
+    # Aplicar filtros sobre la lista actual (ya sea de búsqueda o de BD)
     if filter_origin == "google":
-        leads_pendientes = [l for l in all_leads_pendientes if "GOOGLE" in l.get("origen", "").upper()]
+        filtered_leads = [l for l in current_leads if "GOOGLE" in l.get("origen", "").upper()]
         filter_label = "Solo Google Maps"
     elif filter_origin == "manual":
-        leads_pendientes = [l for l in all_leads_pendientes if l.get("origen", "") == "MANUAL_CSV"]
+        filtered_leads = [l for l in current_leads if l.get("origen", "").lower() in ["manual", "manual_csv"]]
         filter_label = "Solo Manuales"
     else:
-        leads_pendientes = all_leads_pendientes
+        filtered_leads = current_leads
         filter_label = "Todos"
     
     alert_html = ""
-    preview_html = ""
-    
     if success:
         alert_html = f"<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>✅ {urllib.parse.unquote(success)}</div>"
-        
-        if preview:
-            try:
-                preview_data = json.loads(urllib.parse.unquote(preview))
-                rows_preview = ""
-                for p in preview_data:
-                    dup_badge = "<span style='color:#EF4444;font-size:0.7rem;'> (Duplicado)</span>" if p.get("es_duplicado") else "<span style='color:#10B981;font-size:0.7rem;'> (Nuevo)</span>"
-                    rows_preview += f"<tr style='border-bottom:1px solid #334155;'><td style='padding:8px;'>{p['nombre']}{dup_badge}</td><td>{p['rubro']}</td><td>{p['distrito']}</td><td>{p.get('telefono','Sin número')}</td></tr>"
-                
-                preview_html = f"""
-                <div style='background:#1E293B;padding:20px;border-radius:8px;margin-bottom:20px;border:1px solid #475569;'>
-                    <h3 style='margin-top:0;color:#A78BFA;'>🔍 Resultados de la última búsqueda (Primeros 5)</h3>
-                    <table style='width:100%;font-size:0.9rem;'>
-                        <thead><tr style='color:#94A3B8;'><th>Nombre</th><th>Rubro</th><th>Distrito</th><th>Teléfono</th></tr></thead>
-                        <tbody>{rows_preview}</tbody>
-                    </table>
-                </div>
-                """
-            except: pass
-
     elif error:
         alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>❌ {urllib.parse.unquote(error)}</div>"
     
     rows_html = ""
-    for i, lead in enumerate(leads_pendientes, 1):
+    for i, lead in enumerate(filtered_leads, 1):
         email_dest = lead.get("email", "").strip()
         tel_dest = lead.get("telefono", "").strip()
         texto_msg = urllib.parse.quote(lead.get("pitch_automatizado", "Hola"))
-        lead_id = lead.get("id")
+        lead_id = lead.get("id", "temp") # ID temporal si es resultado de búsqueda no guardado
         origen = lead.get("origen", "Desconocido")
         
+        # Badge de origen corregido
         if "GOOGLE" in origen.upper():
             origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">🔍 Google</span>'
-        elif origen == "MANUAL_CSV":
+        elif origen.lower() in ["manual", "manual_csv"]:
             origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">📁 Manual</span>'
         else:
             origen_badge = '<span style="background:#64748B20;color:#64748B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">❓ Otro</span>'
         
+        # Botones de acción (ahora visibles porque los resultados de búsqueda SÍ tienen teléfono)
         btn_accion = ""
         if email_dest:
             btn_accion = f"<form action='/api/send-email/{lead_id}' method='POST' style='margin:0;'><button style='background:#7C3AED;color:white;padding:6px 12px;border:none;border-radius:6px;'>📧 Email</button></form>"
         elif tel_dest:
-            btn_accion = f"<a href='https://wa.me/{tel_dest}?text={texto_msg}' target='_blank' onclick='fetch(\"/api/mark-sent/{lead_id}\",{{method:\"POST\"}});' style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;'>💬 WA</a>"
+            # Si es un lead temporal (de búsqueda), el onclick no marca como enviado en BD aún
+            onclick_js = f"fetch('/api/mark-sent/{lead_id}',{{method:'POST'}});" if lead_id != "temp" else ""
+            btn_accion = f"<a href='https://wa.me/{tel_dest}?text={texto_msg}' target='_blank' onclick='{onclick_js}' style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;'>💬 WA</a>"
         else:
             btn_accion = "<span style='color:#64748B;'>Sin Contacto</span>"
             
-        rows_html += f"<tr style='border-bottom:1px solid #1E293B;'><td style='padding:12px;'>#{i}</td><td style='font-weight:600;'>{lead.get('nombre')}</td><td>{lead.get('rubro')}</td><td>{lead.get('distrito')}</td><td>{lead.get('telefono','Sin número')}</td><td><span style='background:#22D3EE20;color:#22D3EE;padding:4px 10px;border-radius:12px;font-size:0.8rem;'>{lead.get('plan_sugerido')}</span></td><td>{origen_badge}</td><td>{btn_accion}</td></tr>"
+        # Indicador visual si es duplicado en la vista de resultados
+        dup_indicator = ""
+        if lead.get("es_duplicado"):
+            dup_indicator = " <span style='color:#EF4444;font-size:0.7rem;'>(Duplicado)</span>"
+            
+        rows_html += f"<tr style='border-bottom:1px solid #1E293B;'><td style='padding:12px;'>#{i}</td><td style='font-weight:600;'>{lead.get('nombre')}{dup_indicator}</td><td>{lead.get('rubro')}</td><td>{lead.get('distrito')}</td><td>{lead.get('telefono','Sin número')}</td><td><span style='background:#22D3EE20;color:#22D3EE;padding:4px 10px;border-radius:12px;font-size:0.8rem;'>{lead.get('plan_sugerido')}</span></td><td>{origen_badge}</td><td>{btn_accion}</td></tr>"
     
-    if not rows_html: rows_html = "<tr><td colspan='8' style='padding:30px;text-align:center;'>No hay prospectos.</td></tr>"
+    if not rows_html: rows_html = "<tr><td colspan='8' style='padding:30px;text-align:center;'>No hay prospectos en esta vista.</td></tr>"
     
     rubro_options = "".join([f'<option value="{r}" {"selected" if r == last_keyword else ""}>{r}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}" {"selected" if d == last_location else ""}>{d}</option>' for d in DISTRITOS_LIMA])
@@ -317,7 +320,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         <div style="max-width:1200px; margin:0 auto;">
             <h1 style="text-align:center;">🤖 ORASIC Sales Machine</h1>
             {alert_html}
-            {preview_html}
+            
             <div class="search-box">
                 <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex:1; flex-wrap:wrap;">
                     <div style="flex:1; min-width:200px;">
@@ -343,22 +346,31 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
                     <button type="submit" class="search-btn">🔍 Buscar</button>
                 </form>
             </div>
+            
+            <!-- BOTONES DE FILTRO -->
             <div class="filter-buttons">
-                <a href="/?filter_origin=all" class="filter-btn {'active' if filter_origin == 'all' or not filter_origin else ''}"> Todos ({len(all_leads_pendientes)})</a>
-                <a href="/?filter_origin=google" class="filter-btn {'active' if filter_origin == 'google' else ''}">🔍 Google ({len([l for l in all_leads_pendientes if 'GOOGLE' in l.get('origen','').upper()])})</a>
-                <a href="/?filter_origin=manual" class="filter-btn {'active' if filter_origin == 'manual' else ''}">📁 Manual ({len([l for l in all_leads_pendientes if l.get('origen','')=='MANUAL_CSV'])})</a>
+                <a href="/?filter_origin=all{'&search_results='+search_results if search_results else ''}" class="filter-btn {'active' if filter_origin == 'all' or not filter_origin else ''}"> Todos ({len(current_leads)})</a>
+                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}" class="filter-btn {'active' if filter_origin == 'google' else ''}">🔍 Google ({len([l for l in current_leads if 'GOOGLE' in l.get('origen','').upper()])})</a>
+                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}" class="filter-btn {'active' if filter_origin == 'manual' else ''}">📁 Manual ({len([l for l in current_leads if l.get('origen','').lower() in ['manual','manual_csv']])})</a>
             </div>
+
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
                 <div><strong>Enviados:</strong> <span style="color:#22C55E; font-size:1.5rem;">{leads_enviados}</span></div>
-                <div><strong>Pendientes ({filter_label}):</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(leads_pendientes)}</span></div>
+                <div><strong>Vista Actual ({view_mode}):</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(filtered_leads)}</span></div>
                 <a href="/api/export-excel" class="btn-export">📥 Exportar Excel</a>
             </div>
+            
             <table>
                 <thead><tr><th>#</th><th>Nombre</th><th>Rubro</th><th>Distrito</th><th>WhatsApp</th><th>Plan</th><th>Origen</th><th>Acción</th></tr></thead>
                 <tbody>{rows_html}</tbody>
             </table>
+            
+            <div style="margin-top:20px; text-align:center;">
+                 <a href="/" style="color:#94A3B8; text-decoration:underline;">🔄 Limpiar búsqueda y ver todos los pendientes ({len(all_leads_pendientes)})</a>
+            </div>
+
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v9.5 • Lógica de Duplicados Corregida Definitiva • Memoria de Búsqueda • Previsualización</p>
+                <p style="color:#64748B;">v9.6 • Tabla Dinámica por Búsqueda • Filtros Reales • Origen Corregido</p>
             </div>
         </div>
     </body>
