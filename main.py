@@ -358,7 +358,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
                 <tbody>{rows_html}</tbody>
             </table>
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v9.4 • Lógica de Duplicados Corregida • Memoria de Búsqueda • Previsualización</p>
+                <p style="color:#64748B;">v9.5 • Lógica de Duplicados Corregida Definitiva • Memoria de Búsqueda • Previsualización</p>
             </div>
         </div>
     </body>
