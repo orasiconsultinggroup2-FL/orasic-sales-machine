@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
-import os, logging, requests, json, csv, io, smtplib, urllib.parse, unicodedata
+import os, logging, requests, json, csv, io, smtplib, urllib.parse, unicodedata, re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -29,7 +29,6 @@ if SUPABASE_URL and SUPABASE_KEY:
             logger.info("✅ Conexión REST a Supabase exitosa")
             
             # AUTO-REPARACIÓN DE ORIGEN AL INICIAR
-            # Esto corrige tus 162 leads actuales para que el filtro funcione
             try:
                 url_leads = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Pendiente&select=id,origen,direccion_completa"
                 resp_leads = requests.get(url_leads, headers=headers, timeout=10)
@@ -37,7 +36,6 @@ if SUPABASE_URL and SUPABASE_KEY:
                     leads_db = resp_leads.json()
                     for lead in leads_db:
                         current_origin = lead.get("origen", "")
-                        # Si no tiene origen claro o es manual pero tiene dirección larga (típico de Google)
                         if not current_origin or current_origin == "manual" or current_origin == "Desconocido":
                             new_origin = "GOOGLE_MAPS_LEGACY" if lead.get("direccion_completa") and len(lead.get("direccion_completa", "")) > 10 else "MANUAL_CSV"
                             if new_origin != current_origin:
@@ -55,21 +53,25 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
 
-# --- DICCIONARIO DE SINÓNIMOS ---
+# --- DICCIONARIO OPTIMIZADO PARA GOOGLE MAPS ---
+# Usamos los rubros EXACTOS de tu Excel + variaciones que Google Maps entiende
 TERMINOS_RELACIONADOS = {
-    "mascotas": ["Pet Shops", "Veterinarias", "Tienda de mascotas", "Alimentos para perros", "Accesorios para mascotas", "Peluquería canina", "Hospedaje para mascotas", "Guardería canina", "Entrenamiento de perros", "Clínica veterinaria", "Farmacia veterinaria", "Juguetes para mascotas", "Ropa para perros"],
-    "belleza": ["Barberías", "Peluquerías", "Salones de belleza", "Estéticas", "Manicure", "Pedicure", "Spa", "Maquillaje", "Depilación", "Tratamientos faciales", "Uñas acrílicas", "Extensiones de pestañas"],
-    "salud": ["Clínicas", "Consultorios médicos", "Dentistas", "Odontólogos", "Laboratorios clínicos", "Farmacias", "Centros de salud", "Fisioterapia", "Quiropráctica", "Nutricionistas", "Psicólogos"],
-    "comida": ["Restaurantes", "Cafeterías", "Bares", "Discotecas", "Comida rápida", "Pizzerías", "Hamburgueserías", "Sushi", "Mariscos", "Pollerías", "Chifas", "Postres", "Heladerías", "Panaderías", "Pastelerías"],
-    "fitness": ["Gimnasios", "CrossFit", "Yoga", "Pilates", "Centros deportivos", "Canchas de fútbol", "Canchas de tenis", "Piscinas", "Spa deportivo", "Entrenadores personales", "Artes marciales", "Boxeo", "Danza"],
-    "educacion": ["Colegios", "Academias", "Universidades", "Institutos", "Guarderías", "Centros de idiomas", "Capacitación", "Talleres", "Cursos", "Bibliotecas", "Ludotecas", "Centros de estudio"],
-    "automotriz": ["Talleres mecánicos", "Lavaderos de autos", "Repuestos", "Neumáticos", "Concesionarios", "Seguros automotrices", "Alquiler de autos", "Pintura automotriz", "Electrónica automotriz", "Detailing"],
-    "construccion": ["Constructoras", "Arquitectos", "Inmobiliarias", "Ferreterías", "Materiales de construcción", "Pinturerías", "Cerrajerías", "Electricistas", "Plomeros", "Albañiles", "Diseño de interiores"],
-    "tecnologia": ["Tiendas de computadoras", "Reparación de celulares", "Imprentas", "Diseño gráfico", "Marketing digital", "Desarrollo web", "Soporte técnico", "Redes", "Seguridad informática", "Videojuegos"],
-    "ropa": ["Tiendas de ropa", "Zapaterías", "Boutiques", "Moda", "Calzado", "Accesorios de moda", "Joyerías", "Relojerías", "Lencería", "Ropa deportiva", "Uniformes", "Disfraces", "Costureras"]
+    "Barbería": ["Barbería", "Barber Shop", "Barbershop", "Peluquería masculina", "Corte de cabello hombre"],
+    "Clínica Dental": ["Clínica Dental", "Dentista", "Odontólogo", "Consultorio dental", "Ortodoncia", "Blanqueamiento dental"],
+    "Veterinaria": ["Veterinaria", "Clínica veterinaria", "Hospital veterinario", "Pet Shop", "Tienda de mascotas", "Peluquería canina"],
+    "Spa": ["Spa", "Masajes", "Masoterapia", "Relajación", "Terapias corporales", "Wellness"],
+    "Gimnasio": ["Gimnasio", "Gym", "Fitness", "CrossFit", "Entrenamiento personal", "Musculación"],
+    "Cancha de Fútbol": ["Cancha de Fútbol", "Fútbol 5", "Fútbol 7", "Complejo deportivo", "Cancha sintética", "Alquiler de canchas"],
+    "Salón de Belleza": ["Salón de Belleza", "Peluquería", "Estética", "Manicure", "Pedicure", "Spa capilar", "Tratamientos faciales"],
+    "Pilates": ["Pilates", "Estudio de Pilates", "Yoga", "Barré", "Wellness Studio", "Reformer Pilates"],
+    "Clínica Médica": ["Clínica Médica", "Centro Médico", "Policlínico", "Consultorio médico", "Medicina general", "Especialistas"],
+    "Agencia de Marketing": ["Agencia de Marketing", "Marketing Digital", "Publicidad", "Branding", "SEO", "Redes Sociales"],
+    "Academia de Inglés": ["Academia de Inglés", "Instituto de idiomas", "Clases de inglés", "Británico", "ICPNA", "Berlitz"]
 }
 
-RUBROS_NEGOCIOS = list(TERMINOS_RELACIONADOS.keys()) + ["Otro"]
+# Generar lista ordenada para el dropdown
+RUBROS_NEGOCIOS = sorted(list(TERMINOS_RELACIONADOS.keys())) + ["Otro"]
+
 DISTRITOS_LIMA = [
     "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", "Chorrillos", "Cieneguilla", "Comas", "El Agustino", "Independencia", "Jesús María", "La Molina", "La Victoria", "Lima", "Lince", "Los Olivos", "Lurigancho", "Lurín", "Magdalena del Mar", "Miraflores", "Pachacámac", "Pucusana", "Pueblo Libre", "Puente Piedra", "Punta Hermosa", "Punta Negra", "Rímac", "San Bartolo", "San Borja", "San Isidro", "San Juan de Lurigancho", "San Juan de Miraflores", "San Luis", "San Martín de Porres", "San Miguel", "Santa Anita", "Santa María del Mar", "Santa Rosa", "Santiago de Surco", "Surquillo", "Villa El Salvador", "Villa María del Triunfo", "Otro"
 ]
@@ -77,16 +79,10 @@ DISTRITOS_LIMA = [
 # --- FUNCIONES AUXILIARES ---
 
 def normalizar_agresivo(texto):
-    """Normalización extrema para evitar falsos positivos en duplicados"""
     if not texto: return ""
-    # 1. Unicode NFKD para descomponer caracteres
     texto = unicodedata.normalize('NFKD', texto)
-    # 2. Eliminar diacríticos (tildes)
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
-    # 3. Lowercase y strip
     texto = texto.lower().strip()
-    # 4. Eliminar espacios múltiples
-    import re
     texto = re.sub(r'\s+', ' ', texto)
     return texto
 
@@ -107,7 +103,7 @@ def get_leads(status="Pendiente"):
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.{status}&limit=500" # Aumentado límite de lectura
+        url = f"{SUPABASE_URL}/rest/v1/leads?estado=eq.{status}&limit=500"
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
     except: return []
@@ -156,26 +152,30 @@ def send_email_pitch(to_email, business_name, pitch_text):
         logger.error(f"Error email: {e}")
         return False
 
-# --- MOTOR DE BÚSQUEDA INTELIGENTE CORREGIDO ---
+# --- MOTOR DE BÚSQUEDA INTELIGENTE PARA GOOGLE MAPS ---
 
 def search_leads_google_expanded(keyword, location, limit=100):
     GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not GOOGLE_KEY: return []
     
+    # Obtener términos específicos para Google Maps
     terminos_busqueda = [keyword]
-    keyword_lower = keyword.lower().strip()
+    keyword_clean = keyword.strip()
+    
+    # Buscar en el diccionario optimizado
     for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
-        if categoria in keyword_lower or any(s.lower() in keyword_lower for s in sinonimos):
-            terminos_busqueda.extend(sinonimos)
+        if categoria.lower() == keyword_clean.lower() or any(s.lower() == keyword_clean.lower() for s in sinonimos):
+            terminos_busqueda = sinonimos  # Usar SOLO los sinónimos de esa categoría específica
             break
     
-    terminos_unicos = list(dict.fromkeys([t.lower() for t in terminos_busqueda]))
-    logger.info(f"🔍 Buscando '{keyword}' en '{location}'. Términos: {terminos_unicos}")
+    # Eliminar duplicados manteniendo orden
+    terminos_unicos = list(dict.fromkeys(terminos_busqueda))
+    logger.info(f"🔍 Buscando en Google Maps: '{keyword}' en '{location}'. Términos: {terminos_unicos}")
     
     all_leads = []
     existing_leads = get_leads("Pendiente") + get_leads("Enviado")
     
-    # CLAVE: Construir set de claves normalizadas AGRESIVAMENTE
+    # Construir set de claves normalizadas para detección de duplicados
     existing_keys = set()
     for l in existing_leads:
         n = normalizar_agresivo(l.get('nombre', ''))
@@ -191,35 +191,38 @@ def search_leads_google_expanded(keyword, location, limit=100):
             "X-Goog-Api-Key": GOOGLE_KEY, 
             "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber"
         }
+        # Búsqueda específica para Google Maps
         payload = {"textQuery": f"{termino} en {location}", "maxResultCount": min(limit, 50), "languageCode": "es"}
         
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=12)
-            if resp.status_code != 200: continue
+            if resp.status_code != 200: 
+                logger.warning(f"⚠️ Google Maps status {resp.status_code} para '{termino}'")
+                continue
                 
             places = resp.json().get("places", [])
+            logger.info(f"✅ Google encontró {len(places)} lugares para '{termino}' en {location}")
             
             for place in places:
                 name = place.get("displayName", {}).get("text", "").strip()
                 if not name: continue
                 
-                # Normalización agresiva para comparación
                 name_norm = normalizar_agresivo(name)
                 loc_norm = normalizar_agresivo(location)
                 current_key = (name_norm, loc_norm)
                 
                 if current_key in existing_keys:
-                    logger.debug(f"️ Saltado (Duplicado lógico): '{name}' en '{location}'")
+                    logger.debug(f"️ Saltado (Duplicado): '{name}' en '{location}'")
                     continue
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
                 
                 lead = {
                     "nombre": name, 
-                    "rubro": termino.capitalize(), 
+                    "rubro": keyword_clean,  # Guardar la categoría principal seleccionada
                     "distrito": location.title(), 
                     "plan_sugerido": "STARTER",  
-                    "criterio_match": f"Búsqueda expandida: '{keyword}' → '{termino}'", 
+                    "criterio_match": f"Búsqueda Google Maps: '{termino}'", 
                     "origen": "GOOGLE_MAPS_EXPANDED", 
                     "estado": "Pendiente",
                     "email": "",
@@ -230,16 +233,16 @@ def search_leads_google_expanded(keyword, location, limit=100):
                     "created_at": datetime.now().isoformat()
                 }
                 all_leads.append(lead)
-                existing_keys.add(current_key) # Agregar inmediatamente
+                existing_keys.add(current_key)
                 
                 if len(all_leads) >= limit: break
             if len(all_leads) >= limit: break
                 
         except Exception as e:
-            logger.error(f"❌ Error en término '{termino}': {e}")
+            logger.error(f"❌ Error buscando '{termino}': {e}")
             continue
             
-    logger.info(f"🎯 RESULTADO FINAL: {len(all_leads)} leads NUEVOS y únicos para '{keyword}' en {location}")
+    logger.info(f"🎯 RESULTADO FINAL: {len(all_leads)} leads NUEVOS para '{keyword}' en {location}")
     return all_leads[:limit]
 
 # --- RUTAS ---
@@ -264,7 +267,6 @@ async def auto_search(request: Request):
         if insert_lead_supabase(lead):
             count_inserted += 1
             
-    # Guardar historial
     try:
         history_headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
         history_payload = {"keyword": keyword, "location": location, "timestamp": datetime.now().isoformat(), "results_count": len(new_leads), "saved_count": count_inserted}
@@ -272,7 +274,7 @@ async def auto_search(request: Request):
     except: pass
     
     if len(new_leads) > 0 and count_inserted == 0:
-        message = f"Búsqueda completada: {len(new_leads)} encontrados. ⚠️ 0 guardados porque ya existen en tu base (duplicados por nombre+distrito). Revisa la tabla 'Todos'."
+        message = f"Búsqueda completada: {len(new_leads)} encontrados. ⚠️ 0 guardados porque ya existen en tu base (duplicados por nombre+distrito)."
     else:
         message = f"Búsqueda inteligente completada. Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados, {count_inserted} guardados como nuevos."
         
@@ -337,7 +339,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     leads_enviados = get_sent_count()
     all_leads_pendientes = get_leads("Pendiente")
     
-    # Lógica de filtrado corregida
     if filter_origin == "google":
         leads_pendientes = [l for l in all_leads_pendientes if "GOOGLE" in l.get("origen", "").upper()]
         filter_label = "Solo Google Maps"
@@ -350,7 +351,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     
     alert_html = ""
     if success: alert_html = f"<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>✅ {urllib.parse.unquote(success)}</div>"
-    elif error: alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'> {urllib.parse.unquote(error)}</div>"
+    elif error: alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>❌ {urllib.parse.unquote(error)}</div>"
     
     rows_html = ""
     for i, lead in enumerate(leads_pendientes, 1):
@@ -363,7 +364,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         if "GOOGLE" in origen.upper():
             origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">🔍 Google</span>'
         elif origen == "MANUAL_CSV":
-            origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;"> Manual</span>'
+            origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">📁 Manual</span>'
         else:
             origen_badge = '<span style="background:#64748B20;color:#64748B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">❓ Otro</span>'
         
@@ -379,7 +380,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     
     if not rows_html: rows_html = "<tr><td colspan='8' style='padding:30px;text-align:center;'>No hay prospectos.</td></tr>"
     
-    rubro_options = "".join([f'<option value="{r}">{r.title()}</option>' for r in RUBROS_NEGOCIOS])
+    rubro_options = "".join([f'<option value="{r}">{r}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}">{d}</option>' for d in DISTRITOS_LIMA])
     
     html_content = f"""
@@ -413,12 +414,12 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             <div class="search-box">
                 <form action="/api/auto-search" method="post" style="display:flex; gap:10px; flex:1; flex-wrap:wrap;">
                     <div style="flex:1; min-width:200px;">
-                        <label style="font-size:0.8rem; color:#94A3B8;">Categoría</label>
+                        <label style="font-size:0.8rem; color:#94A3B8;">Categoría (Google Maps)</label>
                         <select name="keyword" id="keyword_select" onchange="toggleOther('keyword_select', 'keyword_other')" required>
                             <option value="" disabled selected>Selecciona...</option>
                             {rubro_options}
                         </select>
-                        <input type="text" id="keyword_other" name="keyword_other" placeholder="Otro..." class="other-input">
+                        <input type="text" id="keyword_other" name="keyword_other" placeholder="Otro término..." class="other-input">
                     </div>
                     <div style="flex:1; min-width:200px;">
                         <label style="font-size:0.8rem; color:#94A3B8;">Distrito</label>
@@ -450,7 +451,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
                 <tbody>{rows_html}</tbody>
             </table>
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v9.0 Final • Auto-Reparación Origen • Detección Duplicados Robusta</p>
+                <p style="color:#64748B;">v9.2 • Rubros Optimizados para Google Maps • Auto-Reparación Origen</p>
                 <a href="/historial" style="color:#A78BFA;">📜 Ver Historial</a>
             </div>
         </div>
