@@ -1,11 +1,13 @@
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
-import os, logging, requests, json, csv, io, smtplib, urllib.parse
+import os, logging, requests, json, csv, io, smtplib, urllib.parse, unicodedata
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import google.generativeai as genai
 import uvicorn
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,6 +110,14 @@ DISTRITOS_LIMA = [
 
 # --- FUNCIONES AUXILIARES ---
 
+def normalizar_texto(texto):
+    """Elimina tildes, convierte a minúsculas y quita espacios extra"""
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFKD', texto)
+    texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    return texto.lower().strip()
+
 def call_groq_api(prompt_text):
     if not GROQ_API_KEY: return None
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -204,9 +214,15 @@ def search_leads_google_expanded(keyword, location, limit=100):
     
     all_leads = []
     existing_leads = get_leads("Pendiente") + get_leads("Enviado")
-    existing_names = {l.get('nombre','').lower().strip() for l in existing_leads}
     
-    logger.info(f" Leads existentes en BD: {len(existing_leads)} (Nombres: {list(existing_names)[:5]}...)")
+    # CORRECCIÓN: Usar tupla (nombre_normalizado, distrito_normalizado) para detectar duplicados
+    existing_keys = set()
+    for l in existing_leads:
+        nombre_norm = normalizar_texto(l.get('nombre', ''))
+        distrito_norm = normalizar_texto(l.get('distrito', ''))
+        existing_keys.add((nombre_norm, distrito_norm))
+    
+    logger.info(f"📊 Leads existentes en BD: {len(existing_leads)}")
     
     for termino in terminos_unicos:
         url = "https://places.googleapis.com/v1/places:searchText"
@@ -220,7 +236,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=12)
             if resp.status_code != 200: 
-                logger.warning(f"️ Google Maps devolvió status {resp.status_code} para '{termino}'")
+                logger.warning(f"⚠️ Google Maps devolvió status {resp.status_code} para '{termino}'")
                 continue
                 
             places = resp.json().get("places", [])
@@ -229,12 +245,15 @@ def search_leads_google_expanded(keyword, location, limit=100):
             for place in places:
                 name = place.get("displayName", {}).get("text", "").strip()
                 if not name:
-                    logger.debug(f"❌ Nombre vacío, saltando")
                     continue
                     
-                name_lower = name.lower()
-                if name_lower in existing_names:
-                    logger.debug(f"⚠️ DUPLICADO DETECTADO: '{name}' ya existe en BD")
+                # CORRECCIÓN: Normalizar nombre y distrito antes de comparar
+                name_normalized = normalizar_texto(name)
+                location_normalized = normalizar_texto(location)
+                lead_key = (name_normalized, location_normalized)
+                
+                if lead_key in existing_keys:
+                    logger.debug(f"️ DUPLICADO DETECTADO: '{name}' en '{location}' ya existe en BD")
                     continue
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
@@ -256,8 +275,10 @@ def search_leads_google_expanded(keyword, location, limit=100):
                     "created_at": datetime.now().isoformat()
                 }
                 all_leads.append(lead)
-                existing_names.add(name_lower)
-                logger.info(f" Lead agregado: {name} ({termino})")
+                
+                # CORRECCIÓN: Agregar inmediatamente para evitar duplicados en la misma búsqueda
+                existing_keys.add(lead_key)
+                logger.info(f"💾 Lead agregado: {name} en {location} ({termino})")
                 
                 if len(all_leads) >= limit:
                     logger.info(f"🛑 Límite de {limit} leads alcanzado")
@@ -270,8 +291,9 @@ def search_leads_google_expanded(keyword, location, limit=100):
             logger.error(f"❌ Error buscando '{termino}': {e}")
             continue
             
-    logger.info(f" TOTAL ENCONTRADOS: {len(all_leads)} leads nuevos para '{keyword}' en {location}")
+    logger.info(f"🎯 TOTAL ENCONTRADOS: {len(all_leads)} leads NUEVOS para '{keyword}' en {location}")
     return all_leads[:limit]
+
 # --- RUTAS DE LA API ---
 
 @app.post("/api/auto-search")
@@ -279,7 +301,9 @@ async def auto_search(request: Request):
     form = await request.form()
     keyword = form.get("keyword", "")
     location = form.get("location", "")
-    limit = min(int(form.get("limit", 50)), 100)
+    
+    # CAMBIO: Límite máximo 100, valor por defecto 100
+    limit = min(int(form.get("limit", 100)), 100)
     
     if keyword == "Otro":
         keyword = form.get("keyword_other", "").strip()
@@ -287,7 +311,6 @@ async def auto_search(request: Request):
         location = form.get("location_other", "").strip()
 
     if not keyword or not location:
-        # Si hay error, redirigir al dashboard con mensaje de error
         return RedirectResponse(url="/?error=Faltan+datos", status_code=303)
 
     # Ejecutar búsqueda inteligente
@@ -298,8 +321,21 @@ async def auto_search(request: Request):
         if insert_lead_supabase(lead):
             count_inserted += 1
             
-    # REDIRIGIR AL DASHBOARD CON MENSAJE DE ÉXITO
-    message = f"Búsqueda inteligente completada. Busqué '{keyword}' y términos relacionados. {len(new_leads)} encontrados, {count_inserted} guardados."
+    # GUARDAR BÚSQUEDA EN HISTORIAL
+    try:
+        history_headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        history_payload = {
+            "keyword": keyword,
+            "location": location,
+            "timestamp": datetime.now().isoformat(),
+            "results_count": len(new_leads),
+            "saved_count": count_inserted
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/search_history", headers=history_headers, json=history_payload, timeout=5)
+    except:
+        pass  # Si falla, no interrumpimos el flujo principal
+    
+    message = f"Búsqueda inteligente completada. Busqué '{keyword}' en '{location}' y términos relacionados. {len(new_leads)} encontrados, {count_inserted} guardados como nuevos."
     encoded_message = urllib.parse.quote(message)
     
     return RedirectResponse(url=f"/?success={encoded_message}", status_code=303)
@@ -369,48 +405,155 @@ async def import_personal_csv(request: Request):
         logger.error(f"Error importando CSV: {e}")
         return JSONResponse({"status": "error", "msg": str(e)})
 
-# --- EXPORTAR CSV CON 13 COLUMNAS EXACTAS ---
+# --- EXPORTAR A EXCEL (.XLSX) ---
 
-@app.get("/api/export-csv")
-async def export_csv():
+@app.get("/api/export-excel")
+async def export_excel():
     if not supabase_connected:
         return JSONResponse({"error": "No conectado a Supabase"}, status_code=500)
         
     leads = get_leads("Pendiente")
     
-    output = io.StringIO()
-    writer = csv.writer(output)
+    # Crear libro de Excel
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Leads Pendientes"
     
-    writer.writerow([
+    # Encabezados exactos que pediste
+    headers = [
         "Categoria", "Distrito", "Negocio", "Direccion", "Rating", "Reseñas", 
         "Contacto", "Web/Redes", "Publico objetivo", "Puntos fuertes", 
         "Puntos debiles", "Presencia digital", "Responde reseñas"
-    ])
+    ]
+    ws.append(headers)
     
-    for lead in leads:
-        writer.writerow([
-            lead.get("rubro", ""),
-            lead.get("distrito", ""),
-            lead.get("nombre", ""),
-            lead.get("direccion_completa", ""),
-            "", "", lead.get("telefono", ""), "", lead.get("plan_sugerido", ""),
-            "", lead.get("criterio_match", ""), "No", ""
-        ])
+    # Estilos opcionales para encabezados (negrita y fondo gris)
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="334155", end_color="334155", fill_type="solid")
+    
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
         
+    # Llenar datos
+    for lead in leads:
+        row = [
+            lead.get("rubro", ""),                # Categoria
+            lead.get("distrito", ""),             # Distrito
+            lead.get("nombre", ""),               # Negocio
+            lead.get("direccion_completa", ""),   # Direccion
+            "",                                   # Rating
+            "",                                   # Reseñas
+            lead.get("telefono", ""),             # Contacto
+            "",                                   # Web/Redes
+            lead.get("plan_sugerido", ""),        # Publico objetivo
+            "",                                   # Puntos fuertes
+            lead.get("criterio_match", ""),       # Puntos debiles
+            "No",                                 # Presencia digital
+            ""                                    # Responde reseñas
+        ]
+        ws.append(row)
+        
+    # Guardar en memoria
+    output = io.BytesIO()
+    wb.save(output)
     output.seek(0)
     
+    # Retornar como archivo descargable .xlsx
     return StreamingResponse(
         output,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=leads_orasic_avanzado.csv"}
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=leads_orasic.xlsx"}
     )
 
-# --- DASHBOARD VISUAL CON MENSAJES DE ESTADO ---
+# --- HISTORIAL DE BÚSQUEDAS ---
+
+@app.get("/historial", response_class=HTMLResponse)
+async def search_history():
+    if not supabase_connected:
+        return HTMLResponse("<h1>Error: No conectado a Supabase</h1>")
+    
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        resp = requests.get(f"{SUPABASE_URL}/rest/v1/search_history?order=timestamp.desc&limit=50", headers=headers, timeout=5)
+        history = resp.json() if resp.status_code == 200 else []
+    except:
+        history = []
+    
+    rows_html = ""
+    for i, h in enumerate(history, 1):
+        rows_html += f"""
+        <tr style="border-bottom: 1px solid #1E293B;">
+            <td style="padding:12px; text-align:center; color:#64748B;">#{i}</td>
+            <td style="padding:12px; color:white;">{h.get('keyword', '')}</td>
+            <td style="padding:12px; color:#94A3B8;">{h.get('location', '')}</td>
+            <td style="padding:12px; color:#94A3B8;">{h.get('timestamp', '')[:19]}</td>
+            <td style="padding:12px; text-align:center;"><span style="background:#3B82F620; color:#3B82F6; padding:4px 10px; border-radius:12px; font-size:0.8rem;">{h.get('results_count', 0)}</span></td>
+            <td style="padding:12px; text-align:center;"><span style="background:#10B98120; color:#10B981; padding:4px 10px; border-radius:12px; font-size:0.8rem;">{h.get('saved_count', 0)}</span></td>
+            <td style="padding:12px; text-align:center;">
+                <form action="/api/auto-search" method="post" style="margin:0; display:inline;">
+                    <input type="hidden" name="keyword" value="{h.get('keyword', '')}">
+                    <input type="hidden" name="location" value="{h.get('location', '')}">
+                    <input type="hidden" name="limit" value="100">
+                    <button type="submit" style="background:#A78BFA; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; cursor:pointer;">🔄 Repetir</button>
+                </form>
+            </td>
+        </tr>"""
+    
+    if not rows_html: rows_html = "<tr><td colspan='7' style='padding:30px; text-align:center; color:#64748B;'>No hay búsquedas previas.</td></tr>"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <title>Historial de Búsquedas - ORASIC</title>
+        <style>
+            body {{ background:#0F172A; color:white; font-family:sans-serif; padding:40px; margin:0; }}
+            table {{ width:100%; border-collapse:collapse; background:#1E293B; border-radius:8px; overflow:hidden; }}
+            th {{ background:#334155; color:#CBD5E1; padding:12px; text-align:left; }}
+            tr:hover {{ background:#334155; }}
+            .back-btn {{ background:#64748B; color:white; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block; margin-bottom:20px; }}
+        </style>
+    </head>
+    <body>
+        <div style="max-width:1000px; margin:0 auto;">
+            <a href="/" class="back-btn">← Volver al Dashboard</a>
+            <h1 style="text-align:center; margin-bottom:40px;">📜 Historial de Búsquedas</h1>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th><th>Categoría</th><th>Distrito</th><th>Fecha</th><th>Encontrados</th><th>Guardados</th><th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+# --- DASHBOARD VISUAL CON ORIGEN Y FILTROS ---
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(success: str = None, error: str = None):
+async def dashboard(success: str = None, error: str = None, filter_origin: str = None):
     leads_enviados = get_sent_count()
-    leads_pendientes = get_leads("Pendiente")
+    all_leads_pendientes = get_leads("Pendiente")
+    
+    # Filtrar por origen si se solicita
+    if filter_origin == "google":
+        leads_pendientes = [l for l in all_leads_pendientes if l.get("origen", "").startswith("GOOGLE")]
+        filter_label = "Solo Google Maps"
+    elif filter_origin == "manual":
+        leads_pendientes = [l for l in all_leads_pendientes if l.get("origen", "") == "MANUAL_CSV"]
+        filter_label = "Solo Importación Manual"
+    else:
+        leads_pendientes = all_leads_pendientes
+        filter_label = "Todos"
     
     # Generar mensajes de alerta
     alert_html = ""
@@ -433,11 +576,20 @@ async def dashboard(success: str = None, error: str = None):
         tel_dest = lead.get("telefono", "").strip()
         texto_msg = urllib.parse.quote(lead.get("pitch_automatizado", "Hola"))
         lead_id = lead.get("id")
+        origen = lead.get("origen", "Desconocido")
+        
+        # Badge de origen
+        if origen.startswith("GOOGLE"):
+            origen_badge = '<span style="background:#3B82F620; color:#3B82F6; padding:2px 8px; border-radius:4px; font-size:0.7rem;">🔍 Google</span>'
+        elif origen == "MANUAL_CSV":
+            origen_badge = '<span style="background:#F59E0B20; color:#F59E0B; padding:2px 8px; border-radius:4px; font-size:0.7rem;">📁 Manual</span>'
+        else:
+            origen_badge = '<span style="background:#64748B20; color:#64748B; padding:2px 8px; border-radius:4px; font-size:0.7rem;">❓ Otro</span>'
         
         if email_dest:
             btn_accion = f"""
             <form action='/api/send-email/{lead_id}' method='POST' style='margin:0;'>
-                <button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; cursor:pointer;'> Email</button>
+                <button type='submit' style='background:#7C3AED; color:white; padding:6px 12px; border:none; border-radius:6px; font-size:0.8rem; cursor:pointer;'>📧 Email</button>
             </form>
             """
         elif tel_dest:
@@ -457,10 +609,11 @@ async def dashboard(success: str = None, error: str = None):
             <td style="padding:12px; color:#94A3B8;">{lead.get("distrito")}</td>
             <td style="padding:12px; color:#94A3B8;">{lead.get("telefono", "Sin número")}</td>
             <td style="padding:12px; text-align:center;"><span style="background:#22D3EE20; color:#22D3EE; padding:4px 10px; border-radius:12px; font-size:0.8rem;">{lead.get("plan_sugerido")}</span></td>
+            <td style="padding:12px; text-align:center;">{origen_badge}</td>
             <td style="padding:12px; text-align:center;">{btn_accion}</td>
         </tr>"""
     
-    if not rows_html: rows_html = "<tr><td colspan='7' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
+    if not rows_html: rows_html = "<tr><td colspan='8' style='padding:30px; text-align:center; color:#64748B;'>No hay prospectos pendientes.</td></tr>"
     
     rubro_options = "".join([f'<option value="{r}">{r.title()}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}">{d}</option>' for d in DISTRITOS_LIMA])
@@ -484,6 +637,10 @@ async def dashboard(success: str = None, error: str = None):
             .other-input {{ display:none; margin-top:5px; }}
             .info-box {{ background:#1E293B; padding:15px; border-radius:8px; margin-bottom:20px; border-left: 4px solid #A78BFA; }}
             .info-box p {{ margin:0; color:#CBD5E1; font-size:0.9rem; }}
+            .filter-buttons {{ display:flex; gap:10px; margin-bottom:20px; }}
+            .filter-btn {{ background:#1E293B; color:#CBD5E1; padding:8px 16px; border-radius:6px; text-decoration:none; border:1px solid #475569; transition:all 0.2s; }}
+            .filter-btn.active {{ background:#A78BFA; color:white; border-color:#A78BFA; }}
+            .filter-btn:hover {{ background:#334155; }}
         </style>
         <script>
             function toggleOther(selectId, inputId) {{
@@ -500,13 +657,13 @@ async def dashboard(success: str = None, error: str = None):
         </script>
     </head>
     <body>
-        <div style="max-width:1000px; margin:0 auto;">
-            <h1 style="text-align:center; margin-bottom:40px;"> ORASIC Sales Machine</h1>
+        <div style="max-width:1200px; margin:0 auto;">
+            <h1 style="text-align:center; margin-bottom:40px;">🤖 ORASIC Sales Machine</h1>
             
             {alert_html}
             
             <div class="info-box">
-                <p> <strong>Búsqueda Inteligente:</strong> Cuando seleccionas una categoría (ej: "mascotas"), el sistema busca automáticamente todos los términos relacionados (Pet Shops, Veterinarias, Tiendas de mascotas, etc.) para encontrar más negocios.</p>
+                <p>💡 <strong>Búsqueda Inteligente:</strong> Cuando seleccionas una categoría (ej: "mascotas"), el sistema busca automáticamente todos los términos relacionados (Pet Shops, Veterinarias, Tiendas de mascotas, etc.) para encontrar más negocios.</p>
             </div>
             
             <div class="search-box">
@@ -530,25 +687,33 @@ async def dashboard(success: str = None, error: str = None):
                         <input type="text" id="location_other" name="location_other" placeholder="Escribe otro distrito..." class="other-input">
                     </div>
 
+                    <!-- CAMBIO: Valor por defecto 100, máximo 100 -->
                     <div style="width:100px;">
                         <label style="font-size:0.8rem; color:#94A3B8; display:block; margin-bottom:5px;">Cantidad</label>
-                        <input type="number" name="limit" value="50" min="1" max="100">
+                        <input type="number" name="limit" value="100" min="1" max="100">
                     </div>
 
                     <button type="submit" class="search-btn">🔍 Buscar Inteligente</button>
                 </form>
             </div>
 
+            <!-- BOTONES DE FILTRO -->
+            <div class="filter-buttons">
+                <a href="/?filter_origin=all" class="filter-btn {'active' if filter_origin == 'all' or filter_origin == None else ''}"> Todos ({len(all_leads_pendientes)})</a>
+                <a href="/?filter_origin=google" class="filter-btn {'active' if filter_origin == 'google' else ''}">🔍 Solo Google Maps ({len([l for l in all_leads_pendientes if l.get('origen', '').startswith('GOOGLE')])})</a>
+                <a href="/?filter_origin=manual" class="filter-btn {'active' if filter_origin == 'manual' else ''}">📁 Solo Manuales ({len([l for l in all_leads_pendientes if l.get('origen', '') == 'MANUAL_CSV'])})</a>
+            </div>
+
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
                 <div><strong>Enviados:</strong> <span style="color:#22C55E; font-size:1.5rem;">{leads_enviados}</span></div>
-                <div><strong>Pendientes:</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(leads_pendientes)}</span></div>
-                <a href="/api/export-csv" class="btn-export">📥 Exportar CSV</a>
+                <div><strong>Pendientes ({filter_label}):</strong> <span style="color:#F59E0B; font-size:1.5rem;">{len(leads_pendientes)}</span></div>
+                <a href="/api/export-excel" class="btn-export">📥 Exportar Excel</a>
             </div>
             
             <table>
                 <thead>
                     <tr>
-                        <th>#</th><th>Nombre</th><th>Negocio / Rubro</th><th>Distrito</th><th>WhatsApp</th><th>Plan Sugerido</th><th>Acción</th>
+                        <th>#</th><th>Nombre</th><th>Negocio / Rubro</th><th>Distrito</th><th>WhatsApp</th><th>Plan Sugerido</th><th>Origen</th><th>Acción</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -557,7 +722,10 @@ async def dashboard(success: str = None, error: str = None):
             </table>
             
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B; font-size:0.9rem;">v6.0 • Redirección Automática al Dashboard • Búsqueda Inteligente Expandida</p>
+                <p style="color:#64748B; font-size:0.9rem;">v8.0 • Búsqueda Inteligente • Exportación Excel • Historial • Filtros por Origen</p>
+                <div style="margin-top:10px;">
+                    <a href="/historial" style="color:#A78BFA; text-decoration:none;">📜 Ver Historial de Búsquedas</a>
+                </div>
             </div>
         </div>
     </body>
