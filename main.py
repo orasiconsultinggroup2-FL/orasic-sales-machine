@@ -34,7 +34,6 @@ if SUPABASE_URL and SUPABASE_KEY:
             "Authorization": f"Bearer {SUPABASE_KEY}", 
             "Content-Type": "application/json"
         }
-        # Intentar leer 1 registro para validar conexión
         test_url = f"{SUPABASE_URL}/rest/v1/leads_maestros?select=id&limit=1"
         response = requests.get(test_url, headers=headers, timeout=5)
         if response.status_code == 200:
@@ -77,7 +76,6 @@ DISTRITOS_LIMA = [
 # --- FUNCIONES AUXILIARES ---
 
 def normalizar_agresivo(texto):
-    """Normaliza texto para comparaciones (quita tildes, minúsculas, espacios extra)"""
     if not texto: return ""
     texto = unicodedata.normalize('NFKD', str(texto))
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
@@ -85,7 +83,11 @@ def normalizar_agresivo(texto):
 
 def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, telefono, plan):
     """Genera pitch personalizado según el PLAN asignado automáticamente"""
-    nombre_corto = nombre.split("–")[0].split("-")[0].strip()
+    # PROTECCIÓN CONTRA NONE: Si nombre es None o vacío, usar valor por defecto
+    if not nombre:
+        nombre = "Cliente Potencial"
+    
+    nombre_corto = str(nombre).split("–")[0].split("-")[0].strip()
     rubro_lower = (rubro or "").lower()
     
     # Determinar ángulo de venta
@@ -100,7 +102,7 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
     else:
         angulo = "potenciar sus ventas con una estrategia digital personalizada"
 
-    # Mensajes específicos por PLAN (Lógica de Doble Opción)
+    # Mensajes específicos por PLAN
     if plan == "CUSTOM":
         return (f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. "
                 f"Dado su nivel de operación, no tenemos un paquete estándar, pero sí solemos trabajar de dos formas con empresas de su talla: "
@@ -130,7 +132,6 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
                 f"¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida.")
 
 def get_leads_maestros():
-    """Obtiene leads de la tabla leads_maestros"""
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
@@ -142,23 +143,19 @@ def get_leads_maestros():
         return []
 
 def get_sent_count():
-    """Cuenta leads enviados (fallback a tabla antigua si es necesario)"""
     if not supabase_connected: return 0
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "count=exact"}
-        # Intentar contar en leads_maestros primero
         resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads_maestros?Estado=eq.Enviado&select=id", headers=headers, timeout=5)
         range_header = resp.headers.get('Content-Range', '')
         if '/' in range_header:
             return int(range_header.split('/')[-1])
-        # Fallback a tabla antigua
         resp_old = requests.get(f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id", headers=headers, timeout=5)
         range_header_old = resp_old.headers.get('Content-Range', '')
         return int(range_header_old.split('/')[-1]) if '/' in range_header_old else 0
     except: return 0
 
 def insert_lead_supabase(lead):
-    """Inserta lead en leads_maestros"""
     if not supabase_connected: return False
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
@@ -169,13 +166,11 @@ def insert_lead_supabase(lead):
         return False
 
 def search_leads_google_expanded(keyword, location, limit=100):
-    """Busca leads en Google Places y los califica automáticamente"""
     if not GOOGLE_MAPS_API_KEY: return []
     
     terminos_busqueda = [keyword]
     keyword_clean = keyword.strip()
     
-    # Expandir términos si coincide con categorías conocidas
     for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
         if categoria.lower() == keyword_clean.lower():
             terminos_busqueda = sinonimos
@@ -185,7 +180,6 @@ def search_leads_google_expanded(keyword, location, limit=100):
     all_leads = []
     existing_leads = get_leads_maestros()
     
-    # Crear set de claves existentes para evitar duplicados
     existing_keys = set()
     for l in existing_leads:
         n = normalizar_agresivo(l.get('Negocio', l.get('nombre', '')))
@@ -224,7 +218,6 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 
                 presencia_digital = "Fuerte" if website else ("Media" if tel else "Baja")
                 
-                # Calificación automática para leads de Google
                 plan = "STARTER"
                 has_web = any(x in website.lower() for x in ['.pe', '.com', '.net'])
                 rev_int = int(reviews) if reviews.isdigit() else 0
@@ -315,11 +308,9 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         except:
             search_leads_list = []
     
-    # Separar leads por origen
     google_leads = [l for l in all_leads if l.get("origen") == "GOOGLE_SEARCH"] + search_leads_list
     manual_leads = [l for l in all_leads if l.get("origen") != "GOOGLE_SEARCH"]
     
-    # Determinar vista activa
     if filter_origin == "google":
         filtered_leads = google_leads
         view_title = "RESULTADOS GOOGLE"
@@ -337,44 +328,40 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             filtered_leads = manual_leads
             view_title = "BASE MANUAL (MAESTROS)"
     
-    # Alertas
     alert_html = ""
     if success:
         alert_html = "<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>[OK] " + urllib.parse.unquote(success) + "</div>"
     elif error:
         alert_html = "<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>[ERROR] " + urllib.parse.unquote(error) + "</div>"
     
-    # Generar filas de tabla
     rows_html = ""
     for i, lead in enumerate(filtered_leads, 1):
-        nombre = lead.get('Negocio', lead.get('nombre', ''))
-        rubro = lead.get('Categoria', lead.get('rubro', ''))
-        distrito = lead.get('Distrito', lead.get('distrito', ''))
-        contacto = lead.get('Contacto', lead.get('telefono', ''))
-        rating = lead.get('Rating', lead.get('rating', ''))
-        reseñas = lead.get('Reseñas', lead.get('reseñas', ''))
-        web = lead.get('Web/Redes', lead.get('web_redes', ''))
-        plan = lead.get('Plan_sugerido', lead.get('plan_sugerido', 'STARTER'))
-        origen = lead.get('origen', 'MANUAL_BASE')
-        publico_obj = lead.get('Publico objetivo', '')
-        puntos_f = lead.get('Puntos fuertes', '')
+        # PROTECCIÓN: Usar str() y valores por defecto para evitar None
+        nombre = str(lead.get('Negocio', lead.get('nombre', 'Sin Nombre')))
+        rubro = str(lead.get('Categoria', lead.get('rubro', '')))
+        distrito = str(lead.get('Distrito', lead.get('distrito', '')))
+        contacto = str(lead.get('Contacto', lead.get('telefono', '')))
+        rating = str(lead.get('Rating', lead.get('rating', '')))
+        reseñas = str(lead.get('Reseñas', lead.get('reseñas', '')))
+        web = str(lead.get('Web/Redes', lead.get('web_redes', '')))
+        plan = str(lead.get('Plan_sugerido', lead.get('plan_sugerido', 'STARTER')))
+        origen = str(lead.get('origen', 'MANUAL_BASE'))
+        publico_obj = str(lead.get('Publico objetivo', ''))
+        puntos_f = str(lead.get('Puntos fuertes', ''))
         
         lead_id = lead.get('id', f"temp_{i}")
         
-        # Regenerar pitch si falta
         pitch = lead.get('pitch_automatizado', '')
         if not pitch:
-            pitch = generar_pitch_inteligente(nombre, rubro, distrito, str(rating), str(reseñas), web, contacto, plan)
+            pitch = generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, contacto, plan)
         
         texto_msg = urllib.parse.quote(pitch)
         
-        # Badges
         if origen == "GOOGLE_SEARCH":
             origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">[GOOGLE]</span>'
         else:
             origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">[MAESTRO]</span>'
         
-        # Botones de acción
         btn_accion = ""
         if contacto and contacto != "":
             onclick_js = f"fetch('/api/mark-sent/{lead_id}',{{method:'POST'}});" if str(lead_id).isdigit() or len(str(lead_id)) > 5 else ""
@@ -390,11 +377,9 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
                 f"style='background:#64748B;color:white;padding:6px 12px;border:none;border-radius:6px;cursor:pointer;'>[COPIAR]</button>"
             )
         
-        # Display datos
         rating_display = f"{rating} ({reseñas})" if rating and reseñas and str(reseñas) != "0" else "-"
         web_display = f'<a href="{web}" target="_blank" style="color:#22D3EE;text-decoration:none;">[WEB]</a>' if web else "-"
         
-        # Color plan
         plan_color = "#10B981" if plan == "CUSTOM" else ("#8B5CF6" if plan == "PRO" else ("#3B82F6" if plan == "MANAGER" else "#64748B"))
             
         rows_html += (
@@ -421,7 +406,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     if not rows_html: 
         rows_html = "<tr><td colspan='10' style='padding:30px;text-align:center;'>No hay prospectos en esta vista.</td></tr>"
     
-    # Opciones de select
     rubro_options = "".join([f'<option value="{r}" {"selected" if r == last_keyword else ""}>{r}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}" {"selected" if d == last_location else ""}>{d}</option>' for d in DISTRITOS_LIMA])
     
@@ -429,7 +413,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     count_google = len(google_leads)
     count_total = count_manual + count_google
     
-    # Construir URL base para filtros
     base_params = f"{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}"
     
     html_content = f"""
@@ -517,7 +500,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </div>
 
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v11.2 • Tabla leads_maestros • Pitch Inteligente por Plan • Datos Cualitativos Visibles</p>
+                <p style="color:#64748B;">v11.3 • Fix AttributeError NoneType • Tabla leads_maestros • Pitch Inteligente</p>
             </div>
         </div>
     </body>
@@ -530,11 +513,9 @@ async def mark_sent(lead_id: str):
     if not supabase_connected: return JSONResponse({"status": "error"}, status_code=500)
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-        # Intentar actualizar en leads_maestros
         url = f"{SUPABASE_URL}/rest/v1/leads_maestros?id=eq.{lead_id}"
         resp = requests.patch(url, headers=headers, json={"Estado": "Enviado"}, timeout=5)
         
-        # Fallback a tabla antigua si falla
         if resp.status_code >= 400:
             url_old = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
             requests.patch(url_old, headers=headers, json={"estado": "Enviado"}, timeout=5)
