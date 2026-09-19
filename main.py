@@ -25,9 +25,9 @@ if SUPABASE_URL and SUPABASE_KEY:
         response = requests.get(test_url, headers=headers, timeout=5)
         if response.status_code == 200:
             supabase_connected = True
-            logger.info("✅ Conexión REST a Supabase (leads_maestros) exitosa")
+            logger.info("Conexión REST a Supabase (leads_maestros) exitosa")
     except Exception as e:
-        logger.error(f"❌ Excepción Supabase: {e}")
+        logger.error(f"Excepción Supabase: {e}")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -84,13 +84,13 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
         pitch = f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. Dado su nivel de operación, no tenemos un paquete estándar, pero sí solemos trabajar de dos formas con empresas de su talla: 1) Realizando una auditoría profunda de su embudo de ventas actual para detectar fugas de dinero ocultas, o 2) Integrando nuestro motor de IA directamente con su CRM actual para predecir la demanda estacional. ¿Les haría sentido agendar una llamada de 15 minutos para explorar cuál de estas dos vías les traería más ROI este trimestre?"
         
     elif plan == "PRO":
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''}⭐ con {reseñas or ''} reseñas y una presencia digital consolidada. Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: 1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o 2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. ¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar."
+        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas y una presencia digital consolidada. Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: 1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o 2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. ¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar."
         
     elif plan == "MANAGER":
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''}⭐ con {reseñas or ''} reseñas en Google Maps. Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: 1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o 2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. ¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos."
+        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas en Google Maps. Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: 1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o 2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. ¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos."
         
     else:  # STARTER
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''}⭐ en {distrito} y un trato muy cercano que sus clientes valoran. Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: 1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o 2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. ¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida."
+        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: 1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o 2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. ¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida."
     
     return pitch
 
@@ -99,7 +99,6 @@ def get_leads_maestros(status="Pendiente"):
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        # Filtrar por estado si existe la columna, sino traer todos
         url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=500"
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
@@ -109,7 +108,6 @@ def get_sent_count():
     if not supabase_connected: return 0
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "count=exact"}
-        # Usar la tabla antigua para conteo de enviados si existe, sino 0
         resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id", headers=headers, timeout=5)
         range_header = resp.headers.get('Content-Range', '')
         return int(range_header.split('/')[-1]) if '/' in range_header else 0
@@ -283,9 +281,9 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     
     alert_html = ""
     if success:
-        alert_html = f"<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>✅ {urllib.parse.unquote(success)}</div>"
+        alert_html = f"<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>[OK] {urllib.parse.unquote(success)}</div>"
     elif error:
-        alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>❌ {urllib.parse.unquote(error)}</div>"
+        alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>[ERROR] {urllib.parse.unquote(error)}</div>"
     
     rows_html = ""
     for i, lead in enumerate(filtered_leads, 1):
@@ -313,21 +311,21 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         
         # Badges de origen
         if origen == "GOOGLE_SEARCH":
-            origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">🔍 GOOGLE</span>'
+            origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">[GOOGLE]</span>'
         else:
-            origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">📁 MAESTRO</span>'
+            origen_badge = '<span style="background:#F59E0B20;color:#F59E0B;padding:2px 8px;border-radius:4px;font-size:0.7rem;">[MAESTRO]</span>'
         
         # Botones de acción
         btn_accion = ""
         if contacto and contacto != "":
             onclick_js = f"fetch('/api/mark-sent/{lead_id}',{{method:'POST'}});" if str(lead_id).isdigit() or len(str(lead_id)) > 5 else ""
-            btn_accion = f"<a href='https://wa.me/{contacto}?text={texto_msg}' target='_blank' onclick='{onclick_js}' style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;white-space:nowrap;'>💬 WA</a>"
+            btn_accion = f"<a href='https://wa.me/{contacto}?text={texto_msg}' target='_blank' onclick='{onclick_js}' style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;white-space:nowrap;'>[WA]</a>"
         else:
-            btn_accion = f"<button onclick=\"navigator.clipboard.writeText(decodeURIComponent('{texto_msg}'));this.textContent='✅ Copiado';setTimeout(()=>this.textContent='📋 Copiar Guion',2000);\" style='background:#64748B;color:white;padding:6px 12px;border:none;border-radius:6px;cursor:pointer;'>📋 Copiar Guion</button>"
+            btn_accion = f"<button onclick=\"navigator.clipboard.writeText(decodeURIComponent('{texto_msg}'));this.textContent='[COPIADO]';setTimeout(()=>this.textContent='[COPIAR]',2000);\" style='background:#64748B;color:white;padding:6px 12px;border:none;border-radius:6px;cursor:pointer;'>[COPIAR]</button>"
         
         # Display de datos
-        rating_display = f"{rating}⭐ ({reseñas})" if rating and reseñas and str(reseñas) != "0" else "—"
-        web_display = f'<a href="{web}" target="_blank" style="color:#22D3EE;text-decoration:none;">🌐 Web</a>' if web else "—"
+        rating_display = f"{rating} ({reseñas})" if rating and reseñas and str(reseñas) != "0" else "-"
+        web_display = f'<a href="{web}" target="_blank" style="color:#22D3EE;text-decoration:none;">[WEB]</a>' if web else "-"
         
         # Color de plan
         plan_color = "#10B981" if plan == "CUSTOM" else ("#8B5CF6" if plan == "PRO" else ("#3B82F6" if plan == "MANAGER" else "#64748B"))
@@ -337,7 +335,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             <td style='font-weight:600;'>{nombre}</td>
             <td>{rubro}</td>
             <td>{distrito}</td>
-            <td>{contacto if contacto else '—'}</td>
+            <td>{contacto if contacto else '-'}</td>
             <td>{rating_display}</td>
             <td>{web_display}</td>
             <td><span style='background:{plan_color}20;color:{plan_color};padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:bold;'>{plan}</span></td>
@@ -346,8 +344,8 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         </tr>
         <tr style='border-bottom:1px solid #1E293B; background:#0F172A;'>
             <td colspan='10' style='padding:8px 12px; font-size:0.85rem; color:#94A3B8;'>
-                <strong>Público:</strong> {publico_obj or '—'} | 
-                <strong>Fortalezas:</strong> {puntos_f or '—'}
+                <strong>Público:</strong> {publico_obj or '-'} | 
+                <strong>Fortalezas:</strong> {puntos_f or '-'}
             </td>
         </tr>"""
     
@@ -386,7 +384,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     </head>
     <body>
         <div style="max-width:1400px; margin:0 auto;">
-            <h1 style="text-align:center;">🤖 ORASIC Sales Machine</h1>
+            <h1 style="text-align:center;">ORASIC Sales Machine</h1>
             {alert_html}
             
             <div class="search-box">
@@ -417,8 +415,8 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             
             <div class="filter-buttons">
                 <a href="/?filter_origin=all{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'all' else ''}"> Todos ({count_total})</a>
-                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_leads) else ''}">🔍 Google ({count_google})</a>
-                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_leads) else ''}">📁 Base Manual ({count_manual})</a>
+                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_leads) else ''}">[GOOGLE] ({count_google})</a>
+                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_leads) else ''}">[MAESTRO] ({count_manual})</a>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
@@ -436,7 +434,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </table>
             
             <div style="margin-top:20px; text-align:center;">
-                 <a href="/" style="color:#94A3B8; text-decoration:underline;">🔄 Limpiar búsqueda</a>
+                 <a href="/" style="color:#94A3B8; text-decoration:underline;">Limpiar búsqueda</a>
             </div>
 
             <div style="margin-top:40px; text-align:center;">
