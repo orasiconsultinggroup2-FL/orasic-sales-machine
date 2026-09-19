@@ -1,39 +1,51 @@
+import os
+import logging
+import requests
+import json
+import io
+import urllib.parse
+import unicodedata
+import re
+from datetime import datetime
+
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
-import os, logging, requests, json, csv, io, smtplib, urllib.parse, unicodedata, re
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime
-import uvicorn
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+import uvicorn
 
+# Configuración de Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE ENTORNO ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-supabase_connected = False
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
+# Verificar conexión inicial
+supabase_connected = False
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        headers = {
+            "apikey": SUPABASE_KEY, 
+            "Authorization": f"Bearer {SUPABASE_KEY}", 
+            "Content-Type": "application/json"
+        }
+        # Intentar leer 1 registro para validar conexión
         test_url = f"{SUPABASE_URL}/rest/v1/leads_maestros?select=id&limit=1"
         response = requests.get(test_url, headers=headers, timeout=5)
         if response.status_code == 200:
             supabase_connected = True
-            logger.info("Conexión REST a Supabase (leads_maestros) exitosa")
+            logger.info("Conexión a Supabase (leads_maestros) EXITOSA")
+        else:
+            logger.error(f"Error conectando a Supabase: {response.status_code}")
     except Exception as e:
-        logger.error(f"Excepción Supabase: {e}")
+        logger.error(f"Excepción al conectar Supabase: {str(e)}")
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "orasiclab@gmail.com")
-SMTP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
-
+# --- CONSTANTES Y DATOS MAESTROS ---
 TERMINOS_RELACIONADOS = {
     "Barbería": ["Barbería", "Barber Shop", "Barbershop", "Peluquería masculina"],
     "Clínica Dental": ["Clínica Dental", "Dentista", "Odontólogo", "Consultorio dental"],
@@ -51,23 +63,32 @@ TERMINOS_RELACIONADOS = {
 
 RUBROS_NEGOCIOS = sorted(list(TERMINOS_RELACIONADOS.keys())) + ["Otro"]
 DISTRITOS_LIMA = [
-    "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", "Chorrillos", "Cieneguilla", "Comas", "El Agustino", "Independencia", "Jesús María", "La Molina", "La Victoria", "Lima", "Lince", "Los Olivos", "Lurigancho", "Lurín", "Magdalena del Mar", "Miraflores", "Pachacámac", "Pucusana", "Pueblo Libre", "Puente Piedra", "Punta Hermosa", "Punta Negra", "Rímac", "San Bartolo", "San Borja", "San Isidro", "San Juan de Lurigancho", "San Juan de Miraflores", "San Luis", "San Martín de Porres", "San Miguel", "Santa Anita", "Santa María del Mar", "Santa Rosa", "Santiago de Surco", "Surquillo", "Villa El Salvador", "Villa María del Triunfo", "Otro"
+    "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", "Chorrillos", 
+    "Cieneguilla", "Comas", "El Agustino", "Independencia", "Jesús María", "La Molina", 
+    "La Victoria", "Lima", "Lince", "Los Olivos", "Lurigancho", "Lurín", 
+    "Magdalena del Mar", "Miraflores", "Pachacámac", "Pucusana", "Pueblo Libre", 
+    "Puente Piedra", "Punta Hermosa", "Punta Negra", "Rímac", "San Bartolo", 
+    "San Borja", "San Isidro", "San Juan de Lurigancho", "San Juan de Miraflores", 
+    "San Luis", "San Martín de Porres", "San Miguel", "Santa Anita", 
+    "Santa María del Mar", "Santa Rosa", "Santiago de Surco", "Surquillo", 
+    "Villa El Salvador", "Villa María del Triunfo", "Otro"
 ]
 
+# --- FUNCIONES AUXILIARES ---
+
 def normalizar_agresivo(texto):
+    """Normaliza texto para comparaciones (quita tildes, minúsculas, espacios extra)"""
     if not texto: return ""
-    texto = unicodedata.normalize('NFKD', texto)
+    texto = unicodedata.normalize('NFKD', str(texto))
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
-    texto = texto.lower().strip()
-    texto = re.sub(r'\s+', ' ', texto)
-    return texto
+    return re.sub(r'\s+', ' ', texto.lower().strip())
 
 def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, telefono, plan):
-    """Genera un pitch personalizado basado en los datos reales del lead y su plan"""
+    """Genera pitch personalizado según el PLAN asignado automáticamente"""
     nombre_corto = nombre.split("–")[0].split("-")[0].strip()
+    rubro_lower = (rubro or "").lower()
     
-    # Determinar ángulo según rubro
-    rubro_lower = rubro.lower() if rubro else ""
+    # Determinar ángulo de venta
     if any(x in rubro_lower for x in ["dental", "médica", "veterinaria"]):
         angulo = "captar pacientes de alto valor mediante posicionamiento digital estratégico"
     elif any(x in rubro_lower for x in ["barber", "salón", "spa", "belleza"]):
@@ -78,39 +99,62 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
         angulo = "potenciar su cartera de clientes con herramientas de prospección automatizada"
     else:
         angulo = "potenciar sus ventas con una estrategia digital personalizada"
-    
-    # Construir mensaje según PLAN y datos disponibles
-    if plan == "CUSTOM":
-        pitch = f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. Dado su nivel de operación, no tenemos un paquete estándar, pero sí solemos trabajar de dos formas con empresas de su talla: 1) Realizando una auditoría profunda de su embudo de ventas actual para detectar fugas de dinero ocultas, o 2) Integrando nuestro motor de IA directamente con su CRM actual para predecir la demanda estacional. ¿Les haría sentido agendar una llamada de 15 minutos para explorar cuál de estas dos vías les traería más ROI este trimestre?"
-        
-    elif plan == "PRO":
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas y una presencia digital consolidada. Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: 1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o 2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. ¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar."
-        
-    elif plan == "MANAGER":
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas en Google Maps. Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: 1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o 2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. ¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos."
-        
-    else:  # STARTER
-        pitch = f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: 1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o 2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. ¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida."
-    
-    return pitch
 
-def get_leads_maestros(status="Pendiente"):
+    # Mensajes específicos por PLAN (Lógica de Doble Opción)
+    if plan == "CUSTOM":
+        return (f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. "
+                f"Dado su nivel de operación, no tenemos un paquete estándar, pero sí solemos trabajar de dos formas con empresas de su talla: "
+                f"1) Realizando una auditoría profunda de su embudo de ventas actual para detectar fugas de dinero ocultas, o "
+                f"2) Integrando nuestro motor de IA directamente con su CRM actual para predecir la demanda estacional. "
+                f"¿Les haría sentido agendar una llamada de 15 minutos para explorar cuál de estas dos vías les traería más ROI este trimestre?")
+                
+    elif plan == "PRO":
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas y una presencia digital consolidada. "
+                f"Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: "
+                f"1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o "
+                f"2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. "
+                f"¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar.")
+                
+    elif plan == "MANAGER":
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas con {reseñas or ''} reseñas en Google Maps. "
+                f"Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: "
+                f"1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o "
+                f"2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. "
+                f"¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos.")
+                
+    else:  # STARTER
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating or ''} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. "
+                f"Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: "
+                f"1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o "
+                f"2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. "
+                f"¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida.")
+
+def get_leads_maestros():
     """Obtiene leads de la tabla leads_maestros"""
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=500"
+        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=1000"
         resp = requests.get(url, headers=headers, timeout=10)
         return resp.json() if resp.status_code == 200 else []
-    except: return []
+    except Exception as e:
+        logger.error(f"Error obteniendo leads: {e}")
+        return []
 
 def get_sent_count():
+    """Cuenta leads enviados (fallback a tabla antigua si es necesario)"""
     if not supabase_connected: return 0
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "count=exact"}
-        resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id", headers=headers, timeout=5)
+        # Intentar contar en leads_maestros primero
+        resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads_maestros?Estado=eq.Enviado&select=id", headers=headers, timeout=5)
         range_header = resp.headers.get('Content-Range', '')
-        return int(range_header.split('/')[-1]) if '/' in range_header else 0
+        if '/' in range_header:
+            return int(range_header.split('/')[-1])
+        # Fallback a tabla antigua
+        resp_old = requests.get(f"{SUPABASE_URL}/rest/v1/leads?estado=eq.Enviado&select=id", headers=headers, timeout=5)
+        range_header_old = resp_old.headers.get('Content-Range', '')
+        return int(range_header_old.split('/')[-1]) if '/' in range_header_old else 0
     except: return 0
 
 def insert_lead_supabase(lead):
@@ -119,16 +163,19 @@ def insert_lead_supabase(lead):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads_maestros", headers=headers, json=lead, timeout=5)
-        return resp.status_code >= 200 and resp.status_code < 300
-    except: return False
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        logger.error(f"Error insertando lead: {e}")
+        return False
 
 def search_leads_google_expanded(keyword, location, limit=100):
-    GOOGLE_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if not GOOGLE_KEY: return []
+    """Busca leads en Google Places y los califica automáticamente"""
+    if not GOOGLE_MAPS_API_KEY: return []
     
     terminos_busqueda = [keyword]
     keyword_clean = keyword.strip()
     
+    # Expandir términos si coincide con categorías conocidas
     for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
         if categoria.lower() == keyword_clean.lower():
             terminos_busqueda = sinonimos
@@ -138,6 +185,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
     all_leads = []
     existing_leads = get_leads_maestros()
     
+    # Crear set de claves existentes para evitar duplicados
     existing_keys = set()
     for l in existing_leads:
         n = normalizar_agresivo(l.get('Negocio', l.get('nombre', '')))
@@ -148,7 +196,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
             "Content-Type": "application/json", 
-            "X-Goog-Api-Key": GOOGLE_KEY, 
+            "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, 
             "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri"
         }
         payload = {"textQuery": f"{termino} en {location}", "maxResultCount": min(limit, 50), "languageCode": "es"}
@@ -176,7 +224,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 
                 presencia_digital = "Fuerte" if website else ("Media" if tel else "Baja")
                 
-                # Calificar automáticamente para leads de Google
+                # Calificación automática para leads de Google
                 plan = "STARTER"
                 has_web = any(x in website.lower() for x in ['.pe', '.com', '.net'])
                 rev_int = int(reviews) if reviews.isdigit() else 0
@@ -186,7 +234,6 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 elif has_web and rev_int > 100: plan = "PRO"
                 elif rev_int > 30: plan = "MANAGER"
                 
-                # GENERAR PITCH INTELIGENTE
                 pitch = generar_pitch_inteligente(name, keyword_clean, location, rating, reviews, website, tel, plan)
                 
                 lead = {
@@ -215,9 +262,13 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 
                 if len(all_leads) >= limit: break
             if len(all_leads) >= limit: break
-        except: continue
+        except Exception as e:
+            logger.error(f"Error buscando en Google: {e}")
+            continue
             
     return all_leads[:limit]
+
+# --- ENDPOINTS ---
 
 @app.post("/api/auto-search")
 async def auto_search(request: Request):
@@ -244,7 +295,13 @@ async def auto_search(request: Request):
     
     msg = f"Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados. {count_inserted} guardados."
     
-    return RedirectResponse(url=f"/?success={urllib.parse.quote(msg)}&last_keyword={urllib.parse.quote(keyword)}&last_location={urllib.parse.quote(location)}&search_results={encoded_results}", status_code=303)
+    redirect_url = (
+        f"/?success={urllib.parse.quote(msg)}"
+        f"&last_keyword={urllib.parse.quote(keyword)}"
+        f"&last_location={urllib.parse.quote(location)}"
+        f"&search_results={encoded_results}"
+    )
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None, search_results: str = None):
@@ -262,6 +319,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     google_leads = [l for l in all_leads if l.get("origen") == "GOOGLE_SEARCH"] + search_leads_list
     manual_leads = [l for l in all_leads if l.get("origen") != "GOOGLE_SEARCH"]
     
+    # Determinar vista activa
     if filter_origin == "google":
         filtered_leads = google_leads
         view_title = "RESULTADOS GOOGLE"
@@ -279,15 +337,16 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             filtered_leads = manual_leads
             view_title = "BASE MANUAL (MAESTROS)"
     
+    # Alertas
     alert_html = ""
     if success:
-        alert_html = f"<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>[OK] {urllib.parse.unquote(success)}</div>"
+        alert_html = "<div style='background:#064E3B;border-left:4px solid #10B981;color:#ECFDF5;padding:15px;margin-bottom:20px;'>[OK] " + urllib.parse.unquote(success) + "</div>"
     elif error:
-        alert_html = f"<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>[ERROR] {urllib.parse.unquote(error)}</div>"
+        alert_html = "<div style='background:#7F1D1D;border-left:4px solid #EF4444;color:#FEF2F2;padding:15px;margin-bottom:20px;'>[ERROR] " + urllib.parse.unquote(error) + "</div>"
     
+    # Generar filas de tabla
     rows_html = ""
     for i, lead in enumerate(filtered_leads, 1):
-        # Manejar nombres de columnas flexibles (maestros vs google)
         nombre = lead.get('Negocio', lead.get('nombre', ''))
         rubro = lead.get('Categoria', lead.get('rubro', ''))
         distrito = lead.get('Distrito', lead.get('distrito', ''))
@@ -302,14 +361,14 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         
         lead_id = lead.get('id', f"temp_{i}")
         
-        # Regenerar pitch si no existe
+        # Regenerar pitch si falta
         pitch = lead.get('pitch_automatizado', '')
         if not pitch:
             pitch = generar_pitch_inteligente(nombre, rubro, distrito, str(rating), str(reseñas), web, contacto, plan)
         
         texto_msg = urllib.parse.quote(pitch)
         
-        # Badges de origen
+        # Badges
         if origen == "GOOGLE_SEARCH":
             origen_badge = '<span style="background:#3B82F620;color:#3B82F6;padding:2px 8px;border-radius:4px;font-size:0.7rem;">[GOOGLE]</span>'
         else:
@@ -319,44 +378,59 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         btn_accion = ""
         if contacto and contacto != "":
             onclick_js = f"fetch('/api/mark-sent/{lead_id}',{{method:'POST'}});" if str(lead_id).isdigit() or len(str(lead_id)) > 5 else ""
-            btn_accion = f"<a href='https://wa.me/{contacto}?text={texto_msg}' target='_blank' onclick='{onclick_js}' style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;white-space:nowrap;'>[WA]</a>"
+            btn_accion = (
+                f"<a href='https://wa.me/{contacto}?text={texto_msg}' target='_blank' "
+                f"onclick='{onclick_js}' "
+                f"style='background:#22C55E;color:white;padding:6px 12px;border-radius:6px;text-decoration:none;display:inline-block;white-space:nowrap;'>"
+                f"[WA]</a>"
+            )
         else:
-            btn_accion = f"<button onclick=\"navigator.clipboard.writeText(decodeURIComponent('{texto_msg}'));this.textContent='[COPIADO]';setTimeout(()=>this.textContent='[COPIAR]',2000);\" style='background:#64748B;color:white;padding:6px 12px;border:none;border-radius:6px;cursor:pointer;'>[COPIAR]</button>"
+            btn_accion = (
+                f"<button onclick=\"navigator.clipboard.writeText(decodeURIComponent('{texto_msg}'));this.textContent='[COPIADO]';setTimeout(()=>this.textContent='[COPIAR]',2000);\" "
+                f"style='background:#64748B;color:white;padding:6px 12px;border:none;border-radius:6px;cursor:pointer;'>[COPIAR]</button>"
+            )
         
-        # Display de datos
+        # Display datos
         rating_display = f"{rating} ({reseñas})" if rating and reseñas and str(reseñas) != "0" else "-"
         web_display = f'<a href="{web}" target="_blank" style="color:#22D3EE;text-decoration:none;">[WEB]</a>' if web else "-"
         
-        # Color de plan
+        # Color plan
         plan_color = "#10B981" if plan == "CUSTOM" else ("#8B5CF6" if plan == "PRO" else ("#3B82F6" if plan == "MANAGER" else "#64748B"))
             
-        rows_html += f"""<tr style='border-bottom:1px solid #1E293B;'>
-            <td style='padding:12px;'>#{i}</td>
-            <td style='font-weight:600;'>{nombre}</td>
-            <td>{rubro}</td>
-            <td>{distrito}</td>
-            <td>{contacto if contacto else '-'}</td>
-            <td>{rating_display}</td>
-            <td>{web_display}</td>
-            <td><span style='background:{plan_color}20;color:{plan_color};padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:bold;'>{plan}</span></td>
-            <td>{origen_badge}</td>
-            <td>{btn_accion}</td>
-        </tr>
-        <tr style='border-bottom:1px solid #1E293B; background:#0F172A;'>
-            <td colspan='10' style='padding:8px 12px; font-size:0.85rem; color:#94A3B8;'>
-                <strong>Público:</strong> {publico_obj or '-'} | 
-                <strong>Fortalezas:</strong> {puntos_f or '-'}
-            </td>
-        </tr>"""
+        rows_html += (
+            f"<tr style='border-bottom:1px solid #1E293B;'>"
+            f"<td style='padding:12px;'>#{i}</td>"
+            f"<td style='font-weight:600;'>{nombre}</td>"
+            f"<td>{rubro}</td>"
+            f"<td>{distrito}</td>"
+            f"<td>{contacto if contacto else '-'}</td>"
+            f"<td>{rating_display}</td>"
+            f"<td>{web_display}</td>"
+            f"<td><span style='background:{plan_color}20;color:{plan_color};padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:bold;'>{plan}</span></td>"
+            f"<td>{origen_badge}</td>"
+            f"<td>{btn_accion}</td>"
+            f"</tr>"
+            f"<tr style='border-bottom:1px solid #1E293B; background:#0F172A;'>"
+            f"<td colspan='10' style='padding:8px 12px; font-size:0.85rem; color:#94A3B8;'>"
+            f"<strong>Público:</strong> {publico_obj or '-'} | "
+            f"<strong>Fortalezas:</strong> {puntos_f or '-'}"
+            f"</td>"
+            f"</tr>"
+        )
     
-    if not rows_html: rows_html = "<tr><td colspan='10' style='padding:30px;text-align:center;'>No hay prospectos en esta vista.</td></tr>"
+    if not rows_html: 
+        rows_html = "<tr><td colspan='10' style='padding:30px;text-align:center;'>No hay prospectos en esta vista.</td></tr>"
     
+    # Opciones de select
     rubro_options = "".join([f'<option value="{r}" {"selected" if r == last_keyword else ""}>{r}</option>' for r in RUBROS_NEGOCIOS])
     distrito_options = "".join([f'<option value="{d}" {"selected" if d == last_location else ""}>{d}</option>' for d in DISTRITOS_LIMA])
     
     count_manual = len(manual_leads)
     count_google = len(google_leads)
     count_total = count_manual + count_google
+    
+    # Construir URL base para filtros
+    base_params = f"{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}"
     
     html_content = f"""
     <!DOCTYPE html>
@@ -379,7 +453,12 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             .filter-btn.active {{ background:#A78BFA; color:white; border-color:#A78BFA; }}
         </style>
         <script>
-            function toggleOther(sId, iId) {{ var s=document.getElementById(sId); var i=document.getElementById(iId); if(s.value==="Otro"){{i.style.display="block";i.required=true;}}else{{i.style.display="none";i.required=false;}} }}
+            function toggleOther(sId, iId) {{ 
+                var s=document.getElementById(sId); 
+                var i=document.getElementById(iId); 
+                if(s.value==="Otro"){{i.style.display="block";i.required=true;}}
+                else{{i.style.display="none";i.required=false;}} 
+            }}
         </script>
     </head>
     <body>
@@ -414,9 +493,9 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </div>
             
             <div class="filter-buttons">
-                <a href="/?filter_origin=all{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'all' else ''}"> Todos ({count_total})</a>
-                <a href="/?filter_origin=google{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_leads) else ''}">[GOOGLE] ({count_google})</a>
-                <a href="/?filter_origin=manual{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_leads) else ''}">[MAESTRO] ({count_manual})</a>
+                <a href="/?filter_origin=all{base_params}" class="filter-btn {'active' if filter_origin == 'all' else ''}"> Todos ({count_total})</a>
+                <a href="/?filter_origin=google{base_params}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_leads) else ''}">[GOOGLE] ({count_google})</a>
+                <a href="/?filter_origin=manual{base_params}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_leads) else ''}">[MAESTRO] ({count_manual})</a>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
@@ -438,7 +517,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </div>
 
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v11.0 • Tabla leads_maestros • Pitch Inteligente por Plan • Datos Cualitativos Visibles</p>
+                <p style="color:#64748B;">v11.2 • Tabla leads_maestros • Pitch Inteligente por Plan • Datos Cualitativos Visibles</p>
             </div>
         </div>
     </body>
@@ -451,14 +530,19 @@ async def mark_sent(lead_id: str):
     if not supabase_connected: return JSONResponse({"status": "error"}, status_code=500)
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        # Intentar actualizar en leads_maestros
         url = f"{SUPABASE_URL}/rest/v1/leads_maestros?id=eq.{lead_id}"
         resp = requests.patch(url, headers=headers, json={"Estado": "Enviado"}, timeout=5)
+        
+        # Fallback a tabla antigua si falla
         if resp.status_code >= 400:
-             # Fallback a tabla antigua si no existe Estado en maestros
             url_old = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
             requests.patch(url_old, headers=headers, json={"estado": "Enviado"}, timeout=5)
+            
         return JSONResponse({"status": "success"})
-    except: return JSONResponse({"status": "error"}, status_code=500)
+    except Exception as e:
+        logger.error(f"Error marcando enviado: {e}")
+        return JSONResponse({"status": "error"}, status_code=500)
 
 @app.get("/api/export-excel")
 async def export_excel():
@@ -468,7 +552,6 @@ async def export_excel():
     ws = wb.active
     ws.title = "Leads Maestros"
     
-    # Cabeceras exactas de leads_maestros
     headers = ["Categoria", "Distrito", "Negocio", "Direccion", "Rating", "Reseñas", "Contacto", "Web/Redes", "Publico objetivo", "Puntos fuertes", "Puntos debiles", "Presencia digital", "Responde reseñas", "Plan_sugerido"]
     ws.append(headers)
     
