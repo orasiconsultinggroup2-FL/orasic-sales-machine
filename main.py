@@ -25,26 +25,19 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
-# Verificar conexión inicial
 supabase_connected = False
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        headers = {
-            "apikey": SUPABASE_KEY, 
-            "Authorization": f"Bearer {SUPABASE_KEY}", 
-            "Content-Type": "application/json"
-        }
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
         test_url = f"{SUPABASE_URL}/rest/v1/leads_maestros?select=id&limit=1"
         response = requests.get(test_url, headers=headers, timeout=5)
         if response.status_code == 200:
             supabase_connected = True
-            logger.info("Conexión a Supabase (leads_maestros) EXITOSA")
-        else:
-            logger.error(f"Error conectando a Supabase: {response.status_code}")
+            logger.info("Conexión a Supabase EXITOSA")
     except Exception as e:
-        logger.error(f"Excepción al conectar Supabase: {str(e)}")
+        logger.error(f"Error conexión Supabase: {e}")
 
-# --- CONSTANTES Y DATOS MAESTROS ---
+# --- CONSTANTES ---
 TERMINOS_RELACIONADOS = {
     "Barbería": ["Barbería", "Barber Shop", "Barbershop", "Peluquería masculina"],
     "Clínica Dental": ["Clínica Dental", "Dentista", "Odontólogo", "Consultorio dental"],
@@ -58,7 +51,7 @@ TERMINOS_RELACIONADOS = {
     "Agencia de Marketing": ["Agencia de Marketing", "Marketing Digital", "Publicidad"],
     "Academia de Inglés": ["Academia de Inglés", "Instituto de idiomas", "Británico", "ICPNA"],
     "Panadería": ["Panadería", "Pastelería", "Bakery", "Pan artesanal"],
-    "Zapaterías": ["Zapaterías", "Calzado", "Tienda de zapatos", "Zapatos"] # Agregado para tu prueba
+    "Zapaterías": ["Zapaterías", "Calzado", "Tienda de zapatos"]
 }
 
 RUBROS_NEGOCIOS = sorted(list(TERMINOS_RELACIONADOS.keys())) + ["Otro"]
@@ -83,23 +76,18 @@ def normalizar_agresivo(texto):
     return re.sub(r'\s+', ' ', texto.lower().strip())
 
 def limpiar_numero(valor):
-    """Elimina .0 y convierte a entero limpio para visualización"""
-    if not valor: return ""
+    if not valor and valor != 0: return ""
     try:
         num = float(str(valor).replace(',', ''))
-        if num == int(num):
-            return str(int(num))
+        if num == int(num): return str(int(num))
         return str(num)
-    except:
-        return str(valor)
+    except: return str(valor)
 
 def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, telefono, plan):
-    """Genera pitch personalizado según el PLAN asignado automáticamente"""
     if not nombre: nombre = "Cliente Potencial"
     nombre_corto = str(nombre).split("–")[0].split("-")[0].strip()
     rubro_lower = (rubro or "").lower()
     
-    # Determinar ángulo de venta
     if any(x in rubro_lower for x in ["dental", "médica", "veterinaria"]):
         angulo = "captar pacientes de alto valor mediante posicionamiento digital estratégico"
     elif any(x in rubro_lower for x in ["barber", "salón", "spa", "belleza", "zapato", "calzado"]):
@@ -111,41 +99,39 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
     else:
         angulo = "potenciar sus ventas con una estrategia digital personalizada"
 
-    # Mensajes específicos por PLAN
     if plan == "CUSTOM":
         return (f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. "
                 f"Dado su nivel de operación, no tenemos un paquete estándar, pero sí solemos trabajar de dos formas con empresas de su talla: "
                 f"1) Realizando una auditoría profunda de su embudo de ventas actual para detectar fugas de dinero ocultas, o "
                 f"2) Integrando nuestro motor de IA directamente con su CRM actual para predecir la demanda estacional. "
                 f"¿Les haría sentido agendar una llamada de 15 minutos para explorar cuál de estas dos vías les traería más ROI este trimestre?")
-                
     elif plan == "PRO":
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating} estrellas con {reseñas} reseñas y una presencia digital consolidada. "
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas con {limpiar_numero(reseñas)} reseñas y una presencia digital consolidada. "
                 f"Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: "
                 f"1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o "
                 f"2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. "
                 f"¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar.")
-                
     elif plan == "MANAGER":
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating} estrellas con {reseñas} reseñas en Google Maps. "
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas con {limpiar_numero(reseñas)} reseñas en Google Maps. "
                 f"Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: "
                 f"1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o "
                 f"2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. "
                 f"¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos.")
-                
-    else:  # STARTER
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {rating} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. "
+    else:
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. "
                 f"Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: "
                 f"1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o "
                 f"2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. "
                 f"¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida.")
 
-def get_leads_maestros():
+def get_all_leads():
+    """Obtiene TODOS los leads de Supabase (Maestros + Google guardados)"""
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=2000"
-        resp = requests.get(url, headers=headers, timeout=10)
+        # Aumentamos límite a 3000 para asegurar traer todo
+        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=3000&order=created_at.desc"
+        resp = requests.get(url, headers=headers, timeout=15)
         return resp.json() if resp.status_code == 200 else []
     except Exception as e:
         logger.error(f"Error obteniendo leads: {e}")
@@ -157,84 +143,53 @@ def get_sent_count():
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "count=exact"}
         resp = requests.get(f"{SUPABASE_URL}/rest/v1/leads_maestros?Estado=eq.Enviado&select=id", headers=headers, timeout=5)
         range_header = resp.headers.get('Content-Range', '')
-        if '/' in range_header:
-            return int(range_header.split('/')[-1])
+        if '/' in range_header: return int(range_header.split('/')[-1])
         return 0
     except: return 0
 
 def insert_lead_supabase(lead):
     if not supabase_connected: return False
     try:
-        # LIMPIEZA DE DATOS ANTES DE INSERTAR PARA EVITAR ERRORES DE TIPO
         clean_lead = lead.copy()
-        
-        # Asegurar que Reseñas sea entero o string limpio
+        # Limpieza estricta de tipos para evitar errores de inserción
         if 'Reseñas' in clean_lead:
-            try:
-                val = str(clean_lead['Reseñas']).replace('.0', '').replace(',', '')
-                clean_lead['Reseñas'] = int(float(val)) if val else 0
-            except:
-                clean_lead['Reseñas'] = 0
-                
-        # Asegurar que Rating sea float o string limpio
+            try: clean_lead['Reseñas'] = int(float(str(clean_lead['Reseñas']).replace('.0','').replace(',','')))
+            except: clean_lead['Reseñas'] = 0
         if 'Rating' in clean_lead:
-            try:
-                val = str(clean_lead['Rating']).replace(',', '.')
-                clean_lead['Rating'] = float(val) if val else 0.0
-            except:
-                clean_lead['Rating'] = 0.0
-
+            try: clean_lead['Rating'] = float(str(clean_lead['Rating']).replace(',','.'))
+            except: clean_lead['Rating'] = 0.0
+            
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json", "Prefer": "return=minimal"}
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/leads_maestros", headers=headers, json=clean_lead, timeout=5)
-        
-        if resp.status_code >= 400:
-            logger.error(f"Error insertando lead: {resp.text}")
-            
+        if resp.status_code >= 400: logger.error(f"Error insertando: {resp.text[:100]}")
         return 200 <= resp.status_code < 300
     except Exception as e:
-        logger.error(f"Excepción insertando lead: {e}")
+        logger.error(f"Excepción insertando: {e}")
         return False
 
 def calificar_lead_google(reviews_str, rating_str, website):
-    """Lógica ajustada: Más estricta para MANAGER"""
     plan = "STARTER"
-    has_web = any(x in website.lower() for x in ['.pe', '.com', '.net']) if website else False
+    has_web = any(x in (website or "").lower() for x in ['.pe', '.com', '.net'])
     
-    try:
-        rev_int = int(float(str(reviews_str).replace('.0', '').replace(',', '')))
-    except:
-        rev_int = 0
-        
-    try:
-        rat_float = float(str(rating_str).replace(',', '.'))
-    except:
-        rat_float = 0.0
+    try: rev_int = int(float(str(reviews_str).replace('.0', '').replace(',', '')))
+    except: rev_int = 0
+    try: rat_float = float(str(rating_str).replace(',', '.'))
+    except: rat_float = 0.0
     
-    # REGLAS AJUSTADAS
-    # CUSTOM: Alto volumen + Infraestructura completa + Excelencia
-    if has_web and ('booking' in website.lower() or 'fresha' in website.lower()) and rev_int > 500 and rat_float >= 4.8:
+    if has_web and ('booking' in (website or "").lower() or 'fresha' in (website or "").lower()) and rev_int > 500 and rat_float >= 4.8:
         return "CUSTOM"
-        
-    # PRO: Volumen medio-alto + Presencia digital sólida
-    if has_web and 100 <= rev_int <= 500 and rat_float >= 4.5:
-        return "PRO"
-    if has_web and rev_int > 500 and rat_float >= 4.7:
-        return "PRO"
-        
-    # MANAGER: Demanda comprobada (>=50 reseñas) Y (Tiene Web O Tiene Rating Alto)
-    # Antes era solo >=30 reseñas. Ahora exigimos más calidad.
-    if rev_int >= 50 and (has_web or rat_float >= 4.5):
-        return "MANAGER"
-        
-    # STARTER: Todo lo demás
+    if has_web and 100 <= rev_int <= 500 and rat_float >= 4.5: return "PRO"
+    if has_web and rev_int > 500 and rat_float >= 4.7: return "PRO"
+    # Lógica Manager ajustada: Exige 50+ reseñas Y (Web O Rating alto)
+    if rev_int >= 50 and (has_web or rat_float >= 4.5): return "MANAGER"
     return "STARTER"
 
-def search_leads_google_expanded(keyword, location, limit=100):
-    if not GOOGLE_MAPS_API_KEY: return []
+def search_and_save_leads(keyword, location, limit=100):
+    """Busca en Google, CALIFICA, GUARDA EN BD y retorna los leads"""
+    if not GOOGLE_MAPS_API_KEY: return [], 0
     
     terminos_busqueda = [keyword]
     keyword_clean = keyword.strip()
-    
     for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
         if categoria.lower() == keyword_clean.lower():
             terminos_busqueda = sinonimos
@@ -242,7 +197,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
     
     terminos_unicos = list(dict.fromkeys(terminos_busqueda))
     all_leads = []
-    existing_leads = get_leads_maestros()
+    existing_leads = get_all_leads() # Traer existentes para evitar duplicados
     
     existing_keys = set()
     for l in existing_leads:
@@ -250,6 +205,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
         d = normalizar_agresivo(l.get('Distrito', l.get('distrito', '')))
         existing_keys.add((n, d))
         
+    count_saved = 0
     for termino in terminos_unicos:
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
@@ -272,7 +228,7 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 loc_norm = normalizar_agresivo(location)
                 current_key = (name_norm, loc_norm)
                 
-                is_duplicate = current_key in existing_keys
+                if current_key in existing_keys: continue # Saltar duplicados
                 
                 tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
                 rating = place.get("rating", "")
@@ -281,43 +237,32 @@ def search_leads_google_expanded(keyword, location, limit=100):
                 address = place.get("formattedAddress", "")
                 
                 presencia_digital = "Fuerte" if website else ("Media" if tel else "Baja")
-                
-                # Calificación automática ajustada
                 plan = calificar_lead_google(reviews, rating, website)
-                
                 pitch = generar_pitch_inteligente(name, keyword_clean, location, str(rating), str(reviews), website, tel, plan)
                 
                 lead = {
-                    "Categoria": keyword_clean, 
-                    "Distrito": location.title(), 
-                    "Negocio": name,
-                    "Direccion": address,
-                    "Rating": rating,
-                    "Reseñas": reviews,
-                    "Contacto": tel,
-                    "Web/Redes": website,
-                    "Publico objetivo": "",
-                    "Puntos fuertes": "",
-                    "Puntos debiles": "",
-                    "Presencia digital": presencia_digital,
-                    "Responde reseñas": "",
-                    "Plan_sugerido": plan,
-                    "pitch_automatizado": pitch,
-                    "origen": "GOOGLE_SEARCH",
-                    "created_at": datetime.now().isoformat()
+                    "Categoria": keyword_clean, "Distrito": location.title(), "Negocio": name,
+                    "Direccion": address, "Rating": rating, "Reseñas": reviews,
+                    "Contacto": tel, "Web/Redes": website,
+                    "Publico objetivo": "", "Puntos fuertes": "", "Puntos debiles": "",
+                    "Presencia digital": presencia_digital, "Responde reseñas": "",
+                    "Plan_sugerido": plan, "pitch_automatizado": pitch,
+                    "origen": "GOOGLE_SEARCH", "created_at": datetime.now().isoformat()
                 }
-                all_leads.append(lead)
                 
-                if not is_duplicate:
-                    existing_keys.add(current_key)
-                
+                # GUARDAR INMEDIATAMENTE
+                if insert_lead_supabase(lead):
+                    count_saved += 1
+                    all_leads.append(lead)
+                    existing_keys.add(current_key) # Agregar a set local para evitar duplicados en misma búsqueda
+                    
                 if len(all_leads) >= limit: break
             if len(all_leads) >= limit: break
         except Exception as e:
-            logger.error(f"Error buscando en Google: {e}")
+            logger.error(f"Error Google: {e}")
             continue
             
-    return all_leads[:limit]
+    return all_leads, count_saved
 
 # --- ENDPOINTS ---
 
@@ -334,43 +279,30 @@ async def auto_search(request: Request):
     if not keyword or not location:
         return RedirectResponse(url="/?error=Faltan+datos", status_code=303)
 
-    new_leads = search_leads_google_expanded(keyword, location, limit)
+    # Buscar, Calificar y GUARDAR en BD
+    new_leads, count_saved = search_and_save_leads(keyword, location, limit)
     
-    count_inserted = 0
-    for lead in new_leads:
-        if insert_lead_supabase(lead):
-            count_inserted += 1
-        else:
-            logger.warning(f"No se pudo guardar lead: {lead.get('Negocio')}")
+    msg = f"Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados. {count_saved} guardados en Base de Datos."
     
-    results_json = json.dumps(new_leads)
-    encoded_results = urllib.parse.quote(results_json)
-    
-    msg = f"Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados. {count_inserted} guardados."
-    
+    # Redirigir SIN pasar los resultados por URL (ahora están en BD)
     redirect_url = (
         f"/?success={urllib.parse.quote(msg)}"
         f"&last_keyword={urllib.parse.quote(keyword)}"
         f"&last_location={urllib.parse.quote(location)}"
-        f"&search_results={encoded_results}"
+        f"&filter_origin=google" # Forzar vista Google al terminar búsqueda
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None, search_results: str = None):
+async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None):
     leads_enviados = get_sent_count()
-    all_leads = get_leads_maestros()
+    all_leads = get_all_leads() # LEER SIEMPRE DE BD, NUNCA DE URL
     
-    search_leads_list = []
-    if search_results:
-        try:
-            search_leads_list = json.loads(urllib.parse.unquote(search_results))
-        except:
-            search_leads_list = []
-    
-    google_leads = [l for l in all_leads if l.get("origen") == "GOOGLE_SEARCH"] + search_leads_list
+    # Separar leads por origen REAL en BD
+    google_leads = [l for l in all_leads if l.get("origen") == "GOOGLE_SEARCH"]
     manual_leads = [l for l in all_leads if l.get("origen") != "GOOGLE_SEARCH"]
     
+    # Determinar vista activa
     if filter_origin == "google":
         filtered_leads = google_leads
         view_title = "RESULTADOS GOOGLE"
@@ -381,6 +313,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         filtered_leads = manual_leads + google_leads
         view_title = "TODOS (Base + Google)"
     else:
+        # Por defecto mostrar Google si hay, sino Manual
         if google_leads:
             filtered_leads = google_leads
             view_title = "RESULTADOS DE BÚSQUEDA"
@@ -396,17 +329,13 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     
     rows_html = ""
     for i, lead in enumerate(filtered_leads, 1):
-        # Limpieza de visualización
         nombre = str(lead.get('Negocio', lead.get('nombre', 'Sin Nombre')))
         rubro = str(lead.get('Categoria', lead.get('rubro', '')))
         distrito = str(lead.get('Distrito', lead.get('distrito', '')))
         contacto = str(lead.get('Contacto', lead.get('telefono', '')))
         
-        # LIMPIAR NUMEROS (.0)
-        rating_raw = lead.get('Rating', lead.get('rating', ''))
-        reseñas_raw = lead.get('Reseñas', lead.get('reseñas', ''))
-        rating = limpiar_numero(rating_raw)
-        reseñas = limpiar_numero(reseñas_raw)
+        rating = limpiar_numero(lead.get('Rating', lead.get('rating', '')))
+        reseñas = limpiar_numero(lead.get('Reseñas', lead.get('reseñas', '')))
         
         web = str(lead.get('Web/Redes', lead.get('web_redes', '')))
         plan = str(lead.get('Plan_sugerido', lead.get('plan_sugerido', 'STARTER')))
@@ -478,7 +407,8 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     count_google = len(google_leads)
     count_total = count_manual + count_google
     
-    base_params = f"{'&search_results='+search_results if search_results else ''}&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}"
+    # Parámetros base para filtros (sin search_results porque ya no se usa)
+    base_params = f"&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}"
     
     html_content = f"""
     <!DOCTYPE html>
@@ -542,8 +472,8 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             
             <div class="filter-buttons">
                 <a href="/?filter_origin=all{base_params}" class="filter-btn {'active' if filter_origin == 'all' else ''}"> Todos ({count_total})</a>
-                <a href="/?filter_origin=google{base_params}" class="filter-btn {'active' if filter_origin == 'google' or (not filter_origin and google_leads) else ''}">[GOOGLE] ({count_google})</a>
-                <a href="/?filter_origin=manual{base_params}" class="filter-btn {'active' if filter_origin == 'manual' or (not filter_origin and not google_leads) else ''}">[MAESTRO] ({count_manual})</a>
+                <a href="/?filter_origin=google{base_params}" class="filter-btn {'active' if filter_origin == 'google' else ''}">[GOOGLE] ({count_google})</a>
+                <a href="/?filter_origin=manual{base_params}" class="filter-btn {'active' if filter_origin == 'manual' else ''}">[MAESTRO] ({count_manual})</a>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background:#1E293B; padding:20px; border-radius:8px;">
@@ -565,7 +495,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </div>
 
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v11.4 • Fix Visualización (.0) • Lógica Manager Ajustada • Inserción Robusta</p>
+                <p style="color:#64748B;">v12.0 • Persistencia Total en BD • Contadores Reales • Visualización Limpia</p>
             </div>
         </div>
     </body>
@@ -580,11 +510,6 @@ async def mark_sent(lead_id: str):
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
         url = f"{SUPABASE_URL}/rest/v1/leads_maestros?id=eq.{lead_id}"
         resp = requests.patch(url, headers=headers, json={"Estado": "Enviado"}, timeout=5)
-        
-        if resp.status_code >= 400:
-            url_old = f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}"
-            requests.patch(url_old, headers=headers, json={"estado": "Enviado"}, timeout=5)
-            
         return JSONResponse({"status": "success"})
     except Exception as e:
         logger.error(f"Error marcando enviado: {e}")
@@ -593,7 +518,7 @@ async def mark_sent(lead_id: str):
 @app.get("/api/export-excel")
 async def export_excel():
     if not supabase_connected: return JSONResponse({"error": "No conectado"}, status_code=500)
-    leads = get_leads_maestros()
+    leads = get_all_leads()
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads Maestros"
