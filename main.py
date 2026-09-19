@@ -37,24 +37,29 @@ if SUPABASE_URL and SUPABASE_KEY:
     except Exception as e:
         logger.error(f"Error conexión Supabase: {e}")
 
-# --- CONSTANTES ---
-TERMINOS_RELACIONADOS = {
-    "Barbería": ["Barbería", "Barber Shop", "Barbershop", "Peluquería masculina"],
-    "Clínica Dental": ["Clínica Dental", "Dentista", "Odontólogo", "Consultorio dental"],
-    "Veterinaria": ["Veterinaria", "Clínica veterinaria", "Pet Shop", "Tienda de mascotas"],
-    "Spa": ["Spa", "Masajes", "Masoterapia", "Relajación"],
-    "Gimnasio": ["Gimnasio", "Gym", "Fitness", "CrossFit"],
-    "Cancha de Fútbol": ["Cancha de Fútbol", "Fútbol 5", "Complejo deportivo"],
-    "Salón de Belleza": ["Salón de Belleza", "Peluquería", "Estética", "Manicure"],
-    "Pilates": ["Pilates", "Estudio de Pilates", "Yoga"],
-    "Clínica Médica": ["Clínica Médica", "Centro Médico", "Policlínico"],
-    "Agencia de Marketing": ["Agencia de Marketing", "Marketing Digital", "Publicidad"],
-    "Academia de Inglés": ["Academia de Inglés", "Instituto de idiomas", "Británico", "ICPNA"],
-    "Panadería": ["Panadería", "Pastelería", "Bakery", "Pan artesanal"],
-    "Zapaterías": ["Zapaterías", "Calzado", "Tienda de zapatos"]
+# --- DICCIONARIO INTELIGENTE DE SINONIMOS PARA GOOGLE PLACES ---
+# Mapeo de términos en español a variantes que Google entiende mejor (Inglés + Español común)
+SINONIMOS_GOOGLE = {
+    "barbería": ["Barber shop", "Barbershop", "Peluquería masculina", "Corte de cabello", "Men's grooming"],
+    "clínica dental": ["Dentist", "Dental clinic", "Odontólogo", "Ortodoncia", "Dental care"],
+    "veterinaria": ["Veterinary care", "Pet store", "Clínica veterinaria", "Animal hospital", "Vet"],
+    "spa": ["Spa", "Massage", "Masajes", "Bienestar", "Wellness center"],
+    "gimnasio": ["Gym", "Fitness center", "CrossFit", "Entrenamiento personal", "Health club"],
+    "cancha de fútbol": ["Soccer field", "Fútbol 5", "Sports complex", "Cancha sintética", "Football pitch", "Deportes", "Polideportivo"],
+    "salón de belleza": ["Beauty salon", "Hair salon", "Estética", "Uñas", "Nail salon"],
+    "pilates": ["Pilates studio", "Yoga studio", "Reformer Pilates", "Pilates"],
+    "clínica médica": ["Medical clinic", "Doctor", "Centro médico", "Policlínico", "Health center"],
+    "agencia de marketing": ["Marketing agency", "Digital marketing", "Advertising", "Publicidad", "Media agency"],
+    "academia de inglés": ["English school", "Language school", "Instituto de idiomas", "Academy", "Idiomas"],
+    "panadería": ["Bakery", "Pastelería", "Panadería artesanal", "Cafetería", "Bread"],
+    "zapaterías": ["Shoe store", "Calzado", "Zapatos", "Footwear", "Sneakers"],
+    "joyerías": ["Jewelry store", "Jeweler", "Joyeria", "Relojería", "Accesorios", "Watches"],
+    "pizzerías": ["Pizza", "Pizzeria", "Italian restaurant", "Comida italiana", "Pizza place"],
+    "restaurantes": ["Restaurant", "Comida", "Gastronomía", "Food", "Dining"],
+    "cafeterías": ["Cafe", "Coffee shop", "Cafetería", "Coffee", "Brunch"]
 }
 
-RUBROS_NEGOCIOS = sorted(list(TERMINOS_RELACIONADOS.keys())) + ["Otro"]
+RUBROS_NEGOCIOS = sorted(list(SINONIMOS_GOOGLE.keys())) + ["Otro"]
 DISTRITOS_LIMA = [
     "Ancón", "Ate", "Barranco", "Breña", "Carabayllo", "Chaclacayo", "Chorrillos", 
     "Cieneguilla", "Comas", "El Agustino", "Independencia", "Jesús María", "La Molina", 
@@ -76,7 +81,7 @@ def normalizar_agresivo(texto):
     return re.sub(r'\s+', ' ', texto.lower().strip())
 
 def limpiar_numero(valor):
-    if not valor and valor != 0: return ""
+    if valor is None or valor == "": return ""
     try:
         num = float(str(valor).replace(',', ''))
         if num == int(num): return str(int(num))
@@ -90,14 +95,17 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
     
     if any(x in rubro_lower for x in ["dental", "médica", "veterinaria"]):
         angulo = "captar pacientes de alto valor mediante posicionamiento digital estratégico"
-    elif any(x in rubro_lower for x in ["barber", "salón", "spa", "belleza", "zapato", "calzado"]):
-        angulo = "llenar su agenda/tienda con clientes recurrentes mediante un sistema digital profesional"
+    elif any(x in rubro_lower for x in ["barber", "salón", "spa", "belleza", "zapato", "calzado", "joyer", "reloj"]):
+        angulo = "llenar su tienda/agenda con clientes recurrentes mediante un sistema digital profesional"
     elif any(x in rubro_lower for x in ["gimnasio", "cancha", "academia", "pilates", "inglés"]):
         angulo = "maximizar la ocupación de sus instalaciones con automatización de reservas y captación digital"
-    elif "marketing" in rubro_lower:
-        angulo = "potenciar su cartera de clientes con herramientas de prospección automatizada"
+    elif "marketing" in rubro_lower or "pizza" in rubro_lower or "restaurante" in rubro_lower:
+        angulo = "potenciar sus ventas y pedidos con una estrategia digital personalizada"
     else:
         angulo = "potenciar sus ventas con una estrategia digital personalizada"
+
+    r_clean = limpiar_numero(rating)
+    rev_clean = limpiar_numero(reseñas)
 
     if plan == "CUSTOM":
         return (f"Hola equipo de {nombre_corto}, he revisado su presencia digital y veo que ya tienen una estructura sólida. "
@@ -106,31 +114,29 @@ def generar_pitch_inteligente(nombre, rubro, distrito, rating, reseñas, web, te
                 f"2) Integrando nuestro motor de IA directamente con su CRM actual para predecir la demanda estacional. "
                 f"¿Les haría sentido agendar una llamada de 15 minutos para explorar cuál de estas dos vías les traería más ROI este trimestre?")
     elif plan == "PRO":
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas con {limpiar_numero(reseñas)} reseñas y una presencia digital consolidada. "
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {r_clean} estrellas con {rev_clean} reseñas y una presencia digital consolidada. "
                 f"Con ese volumen de demanda, usualmente ayudamos a marcas como la suya en dos cosas clave: "
                 f"1) Implementando IA para atender consultas básicas 24/7 y liberar a su equipo de recepción, o "
                 f"2) Analizando datos predictivos para saber exactamente qué servicios promocionar antes de que baje la ocupación. "
                 f"¿Les gustaría ver cómo funciona la automatización con IA o prefieren que empecemos por la analítica de ocupación? Les mando un caso de éxito similar.")
     elif plan == "MANAGER":
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas con {limpiar_numero(reseñas)} reseñas en Google Maps. "
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {r_clean} estrellas con {rev_clean} reseñas en Google Maps. "
                 f"Imagino que con ese volumen, coordinar la agenda debe ser un reto. En ORASIC Lab trabajamos con negocios de su nivel en dos frentes: "
                 f"1) Automatizando las reservas para llenar los huecos libres sin intervención manual, o "
                 f"2) Creando un sistema de fidelización para que sus clientes recurrentes vuelvan más seguido y gasten un poco más por visita. "
                 f"¿Sienten que hoy les duele más la gestión del tiempo o la retención de clientes? Quedo atento para mostrarles cómo lo resolvemos.")
     else:
-        return (f"Hola equipo de {nombre_corto}, vi que tienen {limpiar_numero(rating)} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. "
+        return (f"Hola equipo de {nombre_corto}, vi que tienen {r_clean} estrellas en {distrito} y un trato muy cercano que sus clientes valoran. "
                 f"Con esa base de confianza, normalmente ayudamos a negocios como el suyo de dos formas: "
                 f"1) Creando una página simple para que los nuevos clientes del barrio los encuentren fácil en Google, o "
                 f"2) Implementando un sistema de reservas automático para que no pierdan tiempo coordinando citas por WhatsApp. "
                 f"¿Alguna de estas dos opciones les resuena más ahora mismo? Me avisan y les envío una propuesta rápida.")
 
 def get_all_leads():
-    """Obtiene TODOS los leads de Supabase (Maestros + Google guardados)"""
     if not supabase_connected: return []
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        # Aumentamos límite a 3000 para asegurar traer todo
-        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=3000&order=created_at.desc"
+        url = f"{SUPABASE_URL}/rest/v1/leads_maestros?limit=5000&order=created_at.desc"
         resp = requests.get(url, headers=headers, timeout=15)
         return resp.json() if resp.status_code == 200 else []
     except Exception as e:
@@ -151,7 +157,6 @@ def insert_lead_supabase(lead):
     if not supabase_connected: return False
     try:
         clean_lead = lead.copy()
-        # Limpieza estricta de tipos para evitar errores de inserción
         if 'Reseñas' in clean_lead:
             try: clean_lead['Reseñas'] = int(float(str(clean_lead['Reseñas']).replace('.0','').replace(',','')))
             except: clean_lead['Reseñas'] = 0
@@ -180,25 +185,31 @@ def calificar_lead_google(reviews_str, rating_str, website):
         return "CUSTOM"
     if has_web and 100 <= rev_int <= 500 and rat_float >= 4.5: return "PRO"
     if has_web and rev_int > 500 and rat_float >= 4.7: return "PRO"
-    # Lógica Manager ajustada: Exige 50+ reseñas Y (Web O Rating alto)
     if rev_int >= 50 and (has_web or rat_float >= 4.5): return "MANAGER"
     return "STARTER"
 
 def search_and_save_leads(keyword, location, limit=100):
-    """Busca en Google, CALIFICA, GUARDA EN BD y retorna los leads"""
+    """Busca en Google usando sinonimos inteligentes, guarda en BD y retorna leads"""
     if not GOOGLE_MAPS_API_KEY: return [], 0
     
-    terminos_busqueda = [keyword]
     keyword_clean = keyword.strip()
-    for categoria, sinonimos in TERMINOS_RELACIONADOS.items():
-        if categoria.lower() == keyword_clean.lower():
-            terminos_busqueda = sinonimos
+    keyword_norm = normalizar_agresivo(keyword_clean)
+    
+    # Obtener sinonimos inteligentes
+    terminos_busqueda = [keyword_clean] # Siempre incluir el original
+    for key_es, sinonimos in SINONIMOS_GOOGLE.items():
+        if key_es == keyword_norm or keyword_norm in key_es:
+            terminos_busqueda.extend(sinonimos)
             break
     
+    # Eliminar duplicados manteniendo orden
     terminos_unicos = list(dict.fromkeys(terminos_busqueda))
-    all_leads = []
-    existing_leads = get_all_leads() # Traer existentes para evitar duplicados
+    logger.info(f"🔍 Buscando '{keyword_clean}' en '{location}' con términos: {terminos_unicos}")
     
+    all_leads = []
+    existing_leads = get_all_leads()
+    
+    # Crear set de claves existentes para evitar duplicados EXACTOS
     existing_keys = set()
     for l in existing_leads:
         n = normalizar_agresivo(l.get('Negocio', l.get('nombre', '')))
@@ -206,61 +217,83 @@ def search_and_save_leads(keyword, location, limit=100):
         existing_keys.add((n, d))
         
     count_saved = 0
-    for termino in terminos_unicos:
-        url = "https://places.googleapis.com/v1/places:searchText"
-        headers = {
-            "Content-Type": "application/json", 
-            "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, 
-            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri"
-        }
-        payload = {"textQuery": f"{termino} en {location}", "maxResultCount": min(limit, 50), "languageCode": "es"}
-        
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=12)
-            if resp.status_code != 200: continue
-            places = resp.json().get("places", [])
+    
+    # Optimización de distrito: Si es "Santiago de Surco", probar también solo "Surco"
+    distritos_a_probar = [location]
+    if "santiago de surco" in location.lower():
+        distritos_a_probar.append("Surco")
+    elif "san juan de lurigancho" in location.lower():
+        distritos_a_probar.append("Lurigancho")
+    
+    for distrito_try in distritos_a_probar:
+        if len(all_leads) >= limit: break
             
-            for place in places:
-                name = place.get("displayName", {}).get("text", "").strip()
-                if not name: continue
-                
-                name_norm = normalizar_agresivo(name)
-                loc_norm = normalizar_agresivo(location)
-                current_key = (name_norm, loc_norm)
-                
-                if current_key in existing_keys: continue # Saltar duplicados
-                
-                tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
-                rating = place.get("rating", "")
-                reviews = place.get("userRatingCount", "")
-                website = place.get("websiteUri", "")
-                address = place.get("formattedAddress", "")
-                
-                presencia_digital = "Fuerte" if website else ("Media" if tel else "Baja")
-                plan = calificar_lead_google(reviews, rating, website)
-                pitch = generar_pitch_inteligente(name, keyword_clean, location, str(rating), str(reviews), website, tel, plan)
-                
-                lead = {
-                    "Categoria": keyword_clean, "Distrito": location.title(), "Negocio": name,
-                    "Direccion": address, "Rating": rating, "Reseñas": reviews,
-                    "Contacto": tel, "Web/Redes": website,
-                    "Publico objetivo": "", "Puntos fuertes": "", "Puntos debiles": "",
-                    "Presencia digital": presencia_digital, "Responde reseñas": "",
-                    "Plan_sugerido": plan, "pitch_automatizado": pitch,
-                    "origen": "GOOGLE_SEARCH", "created_at": datetime.now().isoformat()
-                }
-                
-                # GUARDAR INMEDIATAMENTE
-                if insert_lead_supabase(lead):
-                    count_saved += 1
-                    all_leads.append(lead)
-                    existing_keys.add(current_key) # Agregar a set local para evitar duplicados en misma búsqueda
-                    
-                if len(all_leads) >= limit: break
+        for termino in terminos_unicos:
             if len(all_leads) >= limit: break
-        except Exception as e:
-            logger.error(f"Error Google: {e}")
-            continue
+                
+            url = "https://places.googleapis.com/v1/places:searchText"
+            headers = {
+                "Content-Type": "application/json", 
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, 
+                "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.primaryType,places.internationalPhoneNumber,places.rating,places.userRatingCount,places.websiteUri"
+            }
+            # Usar el término tal cual (Google entiende bien inglés y español mezclado)
+            payload = {"textQuery": f"{termino} en {distrito_try}", "maxResultCount": min(limit, 50), "languageCode": "es"}
+            
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=12)
+                if resp.status_code != 200: 
+                    logger.warning(f"Google API error para '{termino}': {resp.status_code}")
+                    continue
+                    
+                places = resp.json().get("places", [])
+                logger.info(f"   ↳ Término '{termino}' en '{distrito_try}' trajo {len(places)} lugares")
+                
+                for place in places:
+                    if len(all_leads) >= limit: break
+                        
+                    name = place.get("displayName", {}).get("text", "").strip()
+                    if not name: continue
+                    
+                    name_norm = normalizar_agresivo(name)
+                    loc_norm = normalizar_agresivo(distrito_try) # Usar el distrito que funcionó
+                    current_key = (name_norm, loc_norm)
+                    
+                    # Solo procesar si NO es duplicado exacto
+                    if current_key in existing_keys: 
+                        continue
+                    
+                    tel = place.get("internationalPhoneNumber", "").replace(" ", "").replace("-", "")
+                    rating = place.get("rating", "")
+                    reviews = place.get("userRatingCount", "")
+                    website = place.get("websiteUri", "")
+                    address = place.get("formattedAddress", "")
+                    
+                    presencia_digital = "Fuerte" if website else ("Media" if tel else "Baja")
+                    plan = calificar_lead_google(reviews, rating, website)
+                    pitch = generar_pitch_inteligente(name, keyword_clean, distrito_try.title(), str(rating), str(reviews), website, tel, plan)
+                    
+                    lead = {
+                        "Categoria": keyword_clean, "Distrito": distrito_try.title(), "Negocio": name,
+                        "Direccion": address, "Rating": rating, "Reseñas": reviews,
+                        "Contacto": tel, "Web/Redes": website,
+                        "Publico objetivo": "", "Puntos fuertes": "", "Puntos debiles": "",
+                        "Presencia digital": presencia_digital, "Responde reseñas": "",
+                        "Plan_sugerido": plan, "pitch_automatizado": pitch,
+                        "origen": "GOOGLE_SEARCH", "created_at": datetime.now().isoformat()
+                    }
+                    
+                    # GUARDAR INMEDIATAMENTE EN BD
+                    if insert_lead_supabase(lead):
+                        count_saved += 1
+                        all_leads.append(lead)
+                        existing_keys.add(current_key) # Agregar a set local para evitar duplicados en misma búsqueda
+                    else:
+                        logger.warning(f"No se pudo guardar: {name}")
+                        
+            except Exception as e:
+                logger.error(f"Error Google para '{termino}': {e}")
+                continue
             
     return all_leads, count_saved
 
@@ -284,25 +317,23 @@ async def auto_search(request: Request):
     
     msg = f"Busqué '{keyword}' en '{location}'. {len(new_leads)} encontrados. {count_saved} guardados en Base de Datos."
     
-    # Redirigir SIN pasar los resultados por URL (ahora están en BD)
+    # Redirigir a vista Google para ver resultados inmediatos
     redirect_url = (
         f"/?success={urllib.parse.quote(msg)}"
         f"&last_keyword={urllib.parse.quote(keyword)}"
         f"&last_location={urllib.parse.quote(location)}"
-        f"&filter_origin=google" # Forzar vista Google al terminar búsqueda
+        f"&filter_origin=google" 
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(success: str = None, error: str = None, filter_origin: str = None, last_keyword: str = None, last_location: str = None):
     leads_enviados = get_sent_count()
-    all_leads = get_all_leads() # LEER SIEMPRE DE BD, NUNCA DE URL
+    all_leads = get_all_leads() # LEER SIEMPRE DE BD
     
-    # Separar leads por origen REAL en BD
     google_leads = [l for l in all_leads if l.get("origen") == "GOOGLE_SEARCH"]
     manual_leads = [l for l in all_leads if l.get("origen") != "GOOGLE_SEARCH"]
     
-    # Determinar vista activa
     if filter_origin == "google":
         filtered_leads = google_leads
         view_title = "RESULTADOS GOOGLE"
@@ -313,7 +344,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
         filtered_leads = manual_leads + google_leads
         view_title = "TODOS (Base + Google)"
     else:
-        # Por defecto mostrar Google si hay, sino Manual
         if google_leads:
             filtered_leads = google_leads
             view_title = "RESULTADOS DE BÚSQUEDA"
@@ -407,7 +437,6 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
     count_google = len(google_leads)
     count_total = count_manual + count_google
     
-    # Parámetros base para filtros (sin search_results porque ya no se usa)
     base_params = f"&last_keyword={urllib.parse.quote(last_keyword) if last_keyword else ''}&last_location={urllib.parse.quote(last_location) if last_location else ''}"
     
     html_content = f"""
@@ -495,7 +524,7 @@ async def dashboard(success: str = None, error: str = None, filter_origin: str =
             </div>
 
             <div style="margin-top:40px; text-align:center;">
-                <p style="color:#64748B;">v12.0 • Persistencia Total en BD • Contadores Reales • Visualización Limpia</p>
+                <p style="color:#64748B;">v12.2 • Búsqueda Inteligente Multi-Término • Persistencia Total • Visualización Limpia</p>
             </div>
         </div>
     </body>
